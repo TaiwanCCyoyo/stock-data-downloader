@@ -1,3 +1,5 @@
+"""Self-authored synthetic identities/prices with provider interface field labels."""
+
 from __future__ import annotations
 
 import json
@@ -11,18 +13,18 @@ DETAIL_FIELDS = ["股票代號", "停止買賣日期", "每股換發新股票", 
 TPEX_FIELDS = ["恢復買賣日期", "證券代號", "最後交易日之收盤價格", "恢復買賣開始參考價", "開始交易基準價", "詳細資料"]
 
 
-def twse_resume(*, code: str = "6415", resume: str = "111/07/13", stop: str = "20220706") -> bytes:
-    row = [resume, code, "2,485.00", "621.25", "621.00", f"{code},{stop},20220713"]
+def twse_resume(*, code: str = "9001", resume: str = "111/07/13", stop: str = "20220706") -> bytes:
+    row = [resume, code, "200.00", "50.00", "50.02", f"{code},{stop},20220713"]
     return json.dumps({"stat": "OK", "fields": TWSE_FIELDS, "data": [row]}, ensure_ascii=False).encode()
 
 
-def twse_detail(*, code: str = "6415", stop: str = "111/07/06", rows: list[list[str]] | None = None) -> bytes:
+def twse_detail(*, code: str = "9001", stop: str = "111/07/06", rows: list[list[str]] | None = None) -> bytes:
     data = rows if rows is not None else [[code, "name", stop, "4.00000000 股", "10.00 元/股", "2.50 元/股"]]
     fields = ["股票代號", "名稱", *DETAIL_FIELDS[1:]]
     return json.dumps({"stat": "OK", "fields": fields, "data": data}, ensure_ascii=False).encode()
 
 
-def tpex_detail(*, code: str = "3093", stop: str = "111/12/01", resume: str = "111/12/12", ratio: str = "4.00000000") -> str:
+def tpex_detail(*, code: str = "9002", stop: str = "111/12/01", resume: str = "111/12/12", ratio: str = "4.00000000") -> str:
     pairs = [
         ("證券代號/證券名稱:", f"{code} / name"),
         ("停止買賣日期:", stop),
@@ -35,7 +37,7 @@ def tpex_detail(*, code: str = "3093", stop: str = "111/12/01", resume: str = "1
 
 
 def tpex_resume(*, detail: str | None = None, count: int = 1) -> bytes:
-    row = ["1111212", "3093", "109.50", "27.38", "27.40", detail or tpex_detail()]
+    row = ["1111212", "9002", "100.01", "25.00", "25.02", detail or tpex_detail()]
     packet = {"stat": "ok", "tables": [{"totalCount": count, "fields": TPEX_FIELDS, "data": [row]}]}
     return json.dumps(packet, ensure_ascii=False).encode()
 
@@ -45,7 +47,7 @@ def test_tpex_embedded_exact_ratio_keeps_rounded_reference_and_auction_separate(
     row = result["records"][0]
     assert result["status"] == "observed" and row["market"] == "TPEx"
     assert row["exchange_ratio"] == {"numerator": 4, "denominator": 1}
-    assert (row["previous_close"], row["resume_reference_price"], row["opening_auction_base"]) == ("109.50", "27.38", "27.40")
+    assert (row["previous_close"], row["resume_reference_price"], row["opening_auction_base"]) == ("100.01", "25.00", "25.02")
     assert row["historical_available_at"] is None
 
 
@@ -53,7 +55,7 @@ def test_twse_resume_is_unresolved_until_bound_detail_supplies_exact_terms() -> 
     resume = twse_resume()
     row = extract_par_value_resumes(resume, source="twse/twtb8u", start="2022-01-01", end="2022-12-31")["records"][0]
     assert row["exchange_ratio"] is None and row["exchange_ratio_status"] == "unresolved"
-    assert row["previous_close"] == "2485.00"
+    assert row["previous_close"] == "200.00"
     bound = extract_twse_par_detail(twse_detail(), resume_body=resume, resume_row_index=0, start="2022-01-01", end="2022-12-31")["records"][0]
     assert bound["exchange_ratio"] == {"numerator": 4, "denominator": 1}
     assert bound["old_face_value"] == "10.00" and bound["new_face_value"] == "2.50"
@@ -68,7 +70,7 @@ def test_empty_detail_keeps_matched_resume_event_unresolved() -> None:
 
 
 def test_missing_detail_quantities_remain_unresolved_without_deriving_face_ratio() -> None:
-    rows = [["6415", "name", "111/07/06", "--", "", "--"]]
+    rows = [["9001", "name", "111/07/06", "--", "", "--"]]
     row = extract_twse_par_detail(twse_detail(rows=rows), resume_body=twse_resume(), resume_row_index=0, start="2022-01-01", end="2022-12-31")["records"][0]
     assert row["exchange_ratio"] is None and row["exchange_ratio_status"] == "unresolved"
     assert row["old_face_value"] is row["new_face_value"] is None
@@ -79,7 +81,7 @@ def test_missing_detail_quantities_remain_unresolved_without_deriving_face_ratio
     [
         twse_detail(code="9999"),
         twse_detail(stop="111/07/07"),
-        twse_detail(rows=[["6415", "name", "111/07/06", "3.00000000 股", "10.00 元/股", "2.50 元/股"]]),
+        twse_detail(rows=[["9001", "name", "111/07/06", "3.00000000 股", "10.00 元/股", "2.50 元/股"]]),
     ],
 )
 def test_twse_detail_identity_and_face_ratio_conflicts_reject(detail: bytes) -> None:
@@ -102,10 +104,10 @@ def test_tpex_declared_count_duplicate_and_out_of_window_reject() -> None:
 def test_resume_window_allows_earlier_stop_but_rejects_reversed_dates_and_zero_prices() -> None:
     packet = json.loads(twse_resume())
     packet["data"][0][0] = "111/01/03"
-    packet["data"][0][-1] = "6415,20211225,20220103"
+    packet["data"][0][-1] = "9001,20211225,20220103"
     result = extract_par_value_resumes(json.dumps(packet, ensure_ascii=False).encode(), source="twse/twtb8u", start="2022-01-01", end="2022-01-31")
     assert result["records"][0]["stop_date"] == "2021-12-25"
-    packet["data"][0][-1] = "6415,20220104,20220103"
+    packet["data"][0][-1] = "9001,20220104,20220103"
     with pytest.raises(ParValueEvidenceError, match="precede"):
         extract_par_value_resumes(json.dumps(packet, ensure_ascii=False).encode(), source="twse/twtb8u", start="2022-01-01", end="2022-01-31")
     packet = json.loads(twse_resume())

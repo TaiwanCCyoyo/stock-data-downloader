@@ -132,10 +132,8 @@ def test_run_fetch_skips_a_cached_range_unless_forced(tmp_path: Path, monkeypatc
 
 # --- TPEx sources -------------------------------------------------------------
 #
-# Field lists and values below are the observed ones, recorded in the change's
-# design.md from live probes on 2026-08-29. They are not invented fixtures: the
-# whole point of these tests is that TPEx spells things differently from TWSE, so a
-# made-up payload would test nothing.
+# Interface field labels are retained; all company identities and financial values
+# below are self-authored synthetic fixtures, not captured market observations.
 
 EXDAILYQ_FIELDS = [
     "除權息日期",
@@ -186,25 +184,25 @@ def _tpex_payload(fields: list[str], rows: list[list[str]]) -> dict[str, Any]:
 
 def test_exdailyq_row_normalizes_with_the_tpex_vocabulary():
     # 除息 is TPEx's word for TWSE's 息. Against the TWSE-only map every one of the
-    # 3,096 observed rows classified as UNKNOWN.
+    # rows would classify as UNKNOWN.
     payload = _tpex_payload(
         EXDAILYQ_FIELDS,
         [
             [
                 "114/07/15",
-                "6488",
-                "環球晶",
-                "500.00",
-                "480.00",
+                "9001",
+                "Synthetic Company A",
+                "100.00",
+                "90.00",
                 "0",
-                "20.00",
-                "20.00",
+                "10.00",
+                "10.00",
                 "除息",
-                "528.00",
-                "432.00",
-                "480.00",
-                "480.00",
-                "20.00",
+                "99.00",
+                "81.00",
+                "90.00",
+                "90.00",
+                "10.00",
                 "0",
                 "0",
                 "0",
@@ -218,37 +216,37 @@ def test_exdailyq_row_normalizes_with_the_tpex_vocabulary():
     (row,) = normalize_payload(SOURCE_CONFIGS["exdailyq"], payload)
 
     assert row["market"] == "TPEx"
-    assert row["code"] == "6488"
+    assert row["code"] == "9001"
     assert row["ex_date"] == "2025-07-15"
     assert row["event_type"] == "CASH_DIVIDEND"
-    assert row["previous_close"] == 500.0
-    assert row["reference_price"] == 480.0
+    assert row["previous_close"] == 100.0
+    assert row["reference_price"] == 90.0
     # price_factor is the reference-price ratio, exactly as for TWSE.
-    assert row["price_factor"] == pytest.approx(480.0 / 500.0)
+    assert row["price_factor"] == pytest.approx(90.0 / 100.0)
     assert row["factor_method"] == "TWSE_REFERENCE_PRICE_RATIO"
     # TPEx publishes the cash dividend outright rather than forcing the inference.
-    assert row["cash_dividend_estimate"] == 20.0
+    assert row["cash_dividend_estimate"] == 10.0
 
 
 def test_exdailyq_parses_the_older_schema_era_identically():
     # 2008 and 2015 responses carry 22 fields including 員工紅利轉增資; 2020 and 2025
-    # carry 21 without it. Both are real. Reading by field name means neither needs a
+    # carry 21 without it. Both schema shapes must parse. Reading by field name means neither needs a
     # mapping table -- and nothing may key off the field count.
     row_values = [
         "097/07/15",
-        "6488",
-        "環球晶",
-        "500.00",
-        "480.00",
+        "9001",
+        "Synthetic Company A",
+        "100.00",
+        "90.00",
         "0",
-        "20.00",
-        "20.00",
+        "10.00",
+        "10.00",
         "除息",
-        "528.00",
-        "432.00",
-        "480.00",
-        "480.00",
-        "20.00",
+        "99.00",
+        "81.00",
+        "90.00",
+        "90.00",
+        "10.00",
         "0",
         "0",
         "0",
@@ -262,7 +260,7 @@ def test_exdailyq_parses_the_older_schema_era_identically():
 
     assert row["ex_date"] == "2008-07-15"
     assert row["event_type"] == "CASH_DIVIDEND"
-    assert row["previous_close"] == 500.0
+    assert row["previous_close"] == 100.0
 
 
 def test_an_empty_exdailyq_response_yields_no_rows_and_no_mapping_change():
@@ -275,19 +273,19 @@ def test_an_empty_exdailyq_response_yields_no_rows_and_no_mapping_change():
         [
             [
                 "114/07/15",
-                "6488",
-                "環球晶",
-                "500.00",
-                "480.00",
+                "9001",
+                "Synthetic Company A",
+                "100.00",
+                "90.00",
                 "0",
-                "20.00",
-                "20.00",
+                "10.00",
+                "10.00",
                 "除息",
-                "528.00",
-                "432.00",
-                "480.00",
-                "480.00",
-                "20.00",
+                "99.00",
+                "81.00",
+                "90.00",
+                "90.00",
+                "10.00",
                 "0",
                 "0",
                 "0",
@@ -302,15 +300,15 @@ def test_an_empty_exdailyq_response_yields_no_rows_and_no_mapping_change():
 
 
 def test_revivt_classifies_both_reduction_reasons_and_survives_a_compact_roc_date():
-    # 現金減資 is TPEx's word for TWSE's 退還股款; without it 85 of 281 observed rows
-    # (30%) degrade to the generic CAPITAL_REDUCTION. And 1021007 is a compact 7-digit
+    # 現金減資 is TPEx's word for TWSE's 退還股款; without it cash-reduction rows
+    # degrade to the generic CAPITAL_REDUCTION. And 1021007 is a compact 7-digit
     # ROC date -- the shape that used to reach normalize_yyyymmdd and raise SystemExit,
     # which `except Exception` does not catch, taking the whole daily run with it.
     payload = _tpex_payload(
         REVIVT_FIELDS,
         [
-            ["1021007", "3071", "協禾", "7.44", "6.86", "7.54", "6.18", "6.86", "0", "現金減資", "<table>...</table>"],
-            ["1021210", "5364", "力麗店", "1.15", "46.04", "50.60", "41.48", "46.04", "0", "彌補虧損", "<table>...</table>"],
+            ["1021007", "9002", "協禾", "100.00", "80.00", "88.00", "72.00", "80.00", "0", "現金減資", "<table>...</table>"],
+            ["1021210", "9003", "Synthetic Company C", "2.00", "10.00", "11.00", "9.00", "10.00", "0", "彌補虧損", "<table>...</table>"],
         ],
     )
     cash, loss_offset = normalize_payload(SOURCE_CONFIGS["revivt"], payload)
@@ -318,12 +316,12 @@ def test_revivt_classifies_both_reduction_reasons_and_survives_a_compact_roc_dat
     assert cash["ex_date"] == "2013-10-07", "compact ROC dates must parse, not abort the run"
     assert cash["event_type"] == "CASH_CAPITAL_REDUCTION"
     # A cash reduction returns capital AND shrinks the share count, so its factor can
-    # land either side of 1. This observed row is 0.922 -- nothing may assert > 1.
-    assert cash["price_factor"] == pytest.approx(6.86 / 7.44)
+    # land either side of 1. This synthetic factor is 0.8 -- nothing may assert > 1.
+    assert cash["price_factor"] == pytest.approx(80.00 / 100.00)
     assert cash["price_factor"] < 1
 
     assert loss_offset["event_type"] == "LOSS_OFFSET_CAPITAL_REDUCTION"
-    assert loss_offset["price_factor"] == pytest.approx(46.04 / 1.15)
+    assert loss_offset["price_factor"] == pytest.approx(10.00 / 2.00)
     assert loss_offset["price_factor"] > 1
     # 詳細資料 is an embedded HTML table, not a value: kept verbatim, never parsed.
     assert loss_offset["detail_key"].startswith("<table>")

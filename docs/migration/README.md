@@ -23,18 +23,14 @@ proposal workflow or its configuration. The two existing log/progress commands r
 No tracked `.agents/skills` existed in the source tree; ignored/global skills were
 not copied or modified. Historical records may name the retired tool for provenance.
 
-Private repair receipts and observed price excerpts in three source guides are
-replaced by technical method summaries. Three explicitly real price-fixture test
-files and the value-chain fixtures are changed to synthetic examples. Dates and
-field labels still exercise source-format validation; identifiers are arbitrary
-examples, not a claim that the market never used those codes.
+The complete industry-name dictionary, source URLs and historical source reports are retained under the owner’s clarified minimum-removal scope. Earlier broad method-only replacements were restored. Synthetic test fixtures remain useful reversible substitutes; actual historical evidence is classified separately before public delivery.
 
 ## Publication review still required
 
 The Apache 2.0 code license does not establish market-data redistribution rights.
 Removing `data.zip` is not proof of publication safety. `data/stock_category.json5`,
 source field/schema descriptions, retained historical evidence discussions and any
-remaining embedded third-party examples need attribution/licensing review before
+remaining embedded third-party examples are individually inventoried for attribution/licensing review before
 public release. Fixture rewriting is not a full legal or secret audit.
 
 There are no acquired CSV, SQLite or Parquet datasets in the candidate. Acquisition,
