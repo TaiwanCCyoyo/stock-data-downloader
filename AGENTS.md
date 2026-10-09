@@ -21,6 +21,13 @@ environment.
 - On permission failures, report the exact command and affected paths. Do not
   relocate caches, change environment variables or ACLs, or bypass checks.
 
+## Candidate scheduling gate
+
+- Until the owner has renamed the candidate folder and confirmed its formal
+  production location, do not create, replace or resume market-data update tasks.
+- Existing legacy task disabling belongs to the separate owner-assigned task.
+  This candidate must not repeat that operation or move legacy directories.
+
 ## Data boundaries
 
 - Keep the pipeline independent of downstream applications. Describe artifacts

@@ -16,6 +16,8 @@ The new repository has no remote, inherited Git objects, alternates or tags.
   response dictionary, and replace test mocks that relied on `list.append()` as
   an expression with an explicit recorder. Acquisition logic is unchanged.
   Offline filename-discovery regression tests cover the dividends entry point.
+  The affected-file suite passed: **103 passed, 1 skipped**. The successful normal
+  root commit passed every installed hook, including Mypy and secret detection.
 - The Mypy regression test explicitly exposes installed-module diagnostics;
   otherwise editable installation hides errors in repo-local `.tmp` fixtures.
 

@@ -24,6 +24,11 @@ owner approval before those operations. Do not use `git clean -fdx`,
 
 ## Windows scheduling
 
+**Rebuild candidate gate:** before the owner renames the candidate folder and
+confirms its formal production location, do not register, replace or resume any
+market-data update schedule. Existing legacy-task disabling is handled by a
+separate owner-assigned task; do not repeat it from this candidate.
+
 The unattended pipeline uses Windows Task Scheduler, which can operate while agent
 applications are closed. Keep production refreshes in the primary checkout.
 Both registered actions use `wscript.exe` and a hidden-window launcher:

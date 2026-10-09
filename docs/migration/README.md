@@ -39,7 +39,9 @@ public release. Fixture rewriting is not a full legal or secret audit.
 
 There are no acquired CSV, SQLite or Parquet datasets in the candidate. Acquisition,
 credentials, installing Windows tasks and restarting downloads remain separate,
-owner-authorized operations. Existing production paths and tasks were not modified.
+owner-authorized operations. Before folder renaming and formal production-location
+confirmation, no new market-data schedule may be created or resumed. Existing legacy
+task disabling belongs to a separate task. Production paths and tasks were not modified.
 The candidate has not been verified against production data or a broker account.
 
 Review the source mapping and the `.tmp/rebuild/` verification receipts locally.
