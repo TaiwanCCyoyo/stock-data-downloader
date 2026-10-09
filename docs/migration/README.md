@@ -42,3 +42,13 @@ The candidate has not been verified against production data or a broker account.
 
 Review the source mapping and the `.tmp/rebuild/` verification receipts locally.
 Do not publish `.tmp/`, local environments, private settings or data artifacts.
+
+## Approved project name and later integration
+
+The owner selected `stock-data-downloader` as the outward project and future remote name. It leaves room for future markets; current implemented sources remain Taiwan TWSE/TPEx and Shioaji. No remote has been created or pushed.
+
+The candidate stays at `D:/Project/shioaji-stock-prices-new`. The owner plans to rename it to `stock-data-downloader` after restarting Windows and confirming the formal location. Do not move legacy folders or install/resume schedules as part of naming.
+
+Keep `config` and `shp_utils` import packages, script entry points, the existing `shioaji-stock-project` distribution metadata and matching `uv.lock` unchanged for compatibility. Provider-specific Shioaji names identify actual sources/settings, not the outward project. Legacy repository names, commit/blob identifiers and historical links remain truthful provenance rather than being rewritten to a future repository.
+
+After a separately approved remote creation and producer publication, Stock must update its submodule URL in `.gitmodules` and pin the published candidate commit as its gitlink on an isolated task branch. Preserve the established submodule path unless its own migration is explicitly authorized; update local URL configuration through the normal submodule sync workflow. Deliver that Stock change separately after producer delivery. Neither this name approval nor a README change authorizes that integration, data migration or merging.

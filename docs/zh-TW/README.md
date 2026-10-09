@@ -1,6 +1,8 @@
 [English](../../README.md)
 
-# Shioaji Stock Prices
+# stock-data-downloader
+
+對外專案與未來儲存庫名稱為 `stock-data-downloader`，目前支援台灣市場；此名稱不表示已實作其他市場。現有本機候選位置維持不變，公開與排程另待確認。
 
 獨立的台灣上市／上櫃市場資料管線，使用 Shioaji 與交易所官方來源，
 產出分鐘／日價格、公司行動、證券分類、月營收、法人買賣與產業價值鏈證據。

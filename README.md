@@ -1,12 +1,13 @@
 [繁體中文版](docs/zh-TW/README.md)
 
-# Shioaji Stock Prices
+# stock-data-downloader
 
+The approved outward project and future repository name is `stock-data-downloader`.
 This is a local rebuild candidate pending publication review. Before the owner
 renames its folder and confirms the formal production location, do not install
 or resume market-data update schedules. Keep the legacy folders in place.
 
-A standalone Taiwan (TWSE/TPEx) market-data pipeline using Shioaji and official
+A stock-data download pipeline, currently supporting Taiwan (TWSE/TPEx) through Shioaji and official
 exchange sources. It produces minute/daily prices, corporate actions, security
 metadata, monthly revenue, institutional flows and dated value-chain evidence as
 local CSV, SQLite, Parquet and JSON artifacts.

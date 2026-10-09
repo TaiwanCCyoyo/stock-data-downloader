@@ -1,4 +1,4 @@
-# Shioaji Stock Prices Agent Contract
+# stock-data-downloader Agent Contract
 
 Shared by Codex and Claude Code. This is a standalone Taiwan (TWSE/TPEx)
 market-data acquisition and processing pipeline with its own Git remote and uv
