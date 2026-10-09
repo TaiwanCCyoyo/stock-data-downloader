@@ -1,0 +1,39 @@
+# python
+__pycache__
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local workspaces and evidence; ignored does not mean disposable.
+/.worktrees/
+/.tmp/
+
+# log
+*.log
+precommit_*.txt
+
+# Acquired data and historical evidence (preserve during repository cleanup).
+data/*.csv
+data/*.parquet
+data/*.sqlite
+data/*.sqlite-*
+data/adjusted_prices
+data/technical_features/
+data/dividends
+data/raw
+data/stock_symbol_mapping.json5
+data/data_quality_report.json
+data/value_chain_classification.json
+data/value_chain_classification_history
+data/*.lock
+
+# API
+.env
+Sinopac.pfx
+
+# uv
+.venv
+.pre-commit-cache*
+
+# zip
+*.zip

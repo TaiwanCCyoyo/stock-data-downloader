@@ -1,0 +1,58 @@
+repos:
+    # Basic out-of-the-box checks.
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v6.0.0
+      hooks:
+          - id: trailing-whitespace
+          - id: end-of-file-fixer
+          - id: check-yaml
+          - id: check-added-large-files
+
+    # Detect committed secrets before they enter history.
+    - repo: https://github.com/Yelp/detect-secrets
+      rev: v1.5.0
+      hooks:
+          - id: detect-secrets
+            exclude: ^(uv\.lock|package-lock\.json)$
+
+    # Prettier (formats every language it supports: TS/JS, HTML, CSS, JSON,
+    # YAML, Markdown, etc.). `types: [text]` + --ignore-unknown, both defined
+    # upstream, mean new supported extensions never need config here.
+    - repo: https://github.com/rbubley/mirrors-prettier
+      rev: v3.9.5
+      hooks:
+          - id: prettier
+
+    # Encoding checks accept multilingual text and never print file contents.
+    - repo: local
+      hooks:
+          - id: file-validation
+            name: File Hygiene (UTF-8 encoding)
+            entry: uv run python scripts/file_hygiene.py --file
+            language: system
+            types: [text]
+          - id: mypy
+            name: Mypy (Targeted Python Check)
+            entry: uv run mypy --explicit-package-bases
+            language: system
+            types: [python]
+            require_serial: true # Mypy batches share one SQLite cache.
+          - id: pyright
+            name: Pyright (Targeted Python Check)
+            entry: uv run pyright
+            language: system
+            types: [python]
+
+    # Keep the hook version aligned with the Ruff version resolved in uv.lock.
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.15.22
+      hooks:
+          - id: ruff
+            args: [--fix]
+          - id: ruff-format
+
+    # Taplo (TOML Formatter)
+    - repo: https://github.com/ComPWA/taplo-pre-commit
+      rev: v0.9.3
+      hooks:
+          - id: taplo-format

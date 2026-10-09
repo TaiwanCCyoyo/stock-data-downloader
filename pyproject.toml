@@ -1,0 +1,72 @@
+[project]
+name = "shioaji-stock-project"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+  "json5>=0.12.1",
+  "numpy>=2.3.2",
+  "pandas>=2.3.2",
+  "pyarrow>=25.0.0",
+  "python-dotenv>=1.2.2",
+  "requests>=2.32",
+  "rich>=14.1.0",
+  "shioaji[speed]>=1.2.7",
+  "truststore>=0.10.4",
+  "yfinance>=1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# config/ and shp_utils/ are installed so that scripts/ can import them no
+# matter how they are invoked. Without this, running scripts/run_daily.py
+# directly puts only scripts/ on sys.path and `from config import config`
+# fails -- the pytest pythonpath setting hides that, because it covers the
+# tests but not the real entry points.
+[tool.hatch.build.targets.wheel]
+packages = ["config", "shp_utils"]
+
+[dependency-groups]
+dev = [
+  "mypy>=2.3.1",
+  "pre-commit>=4.5.1",
+  "pyright>=1.1.414",
+  "pytest>=8.0.0",
+  "ruff>=0.15.9",
+  "types-requests>=2.33.0.20260906",
+]
+
+[tool.pytest.ini_options]
+# Tests live in tests/ and the modules under test in scripts/, imported by
+# name (import run_daily, import backup_data, ...). Both directories need to
+# be on sys.path: "." for config/ and shp_utils/, "scripts" for the pipeline
+# modules. Without this every test import fails at collection.
+pythonpath = [".", "scripts"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 160
+exclude = ["legacy"]
+
+[tool.ruff.format]
+preview = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "ANN001", "T201"]
+
+[tool.mypy]
+explicit_package_bases = true
+check_untyped_defs = true
+# Retain imported types without reporting diagnostics from unsubmitted modules.
+follow_imports = "silent"
+ignore_missing_imports = true
+mypy_path = "$MYPY_CONFIG_FILE_DIR/scripts"
+
+[tool.pyright]
+include = ["scripts", "shp_utils", "config", "tests"]
+extraPaths = ["scripts"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"

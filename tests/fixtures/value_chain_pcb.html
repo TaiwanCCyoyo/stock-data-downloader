@@ -1,0 +1,99 @@
+<!-- Self-authored synthetic schema example; not acquired market data. -->
+<!doctype html>
+<html>
+    <body>
+        <select id="ic_select">
+            <option value="">請選擇</option>
+            <option value="D000">測試產業甲</option>
+            <option value="L000" selected>測試產業乙</option>
+            <option value="J000">測試產業丙</option>
+        </select>
+        <h3>測試產業乙產業鏈簡介</h3>
+        <div id="main_ic_panel" class="chain-panel">
+            <div class="chain">
+                <div class="chain-title-panel">上游</div>
+                <div class="chain-company">
+                    <div id="ic_link_L100" class="company-chain-panel">
+                        測試材料
+                    </div>
+                </div>
+            </div>
+            <div class="chain">
+                <div class="chain-title-panel">中游</div>
+                <div class="chain-company">
+                    <div id="ic_link_L610" class="company-chain-panel">
+                        測試製造
+                    </div>
+                </div>
+            </div>
+            <div class="chain">
+                <div class="chain-title-panel">下游</div>
+                <div class="company-chain-panel-blank">各類電子產品</div>
+            </div>
+        </div>
+        <div id="companyList_L100" title="測試材料" class="x-hidden">
+            <div class="company-list">
+                <table>
+                    <tr>
+                        <td class="company"><b>本國上市公司(2家)</b></td>
+                        <td>
+                            <a
+                                href="company_basic.php?stk_code=9001"
+                                title="測試公司甲"
+                                >測試公司甲</a
+                            >
+                        </td>
+                        <td>
+                            <a
+                                href="company_basic.php?stk_code=9002"
+                                title="測試公司乙"
+                                >測試公司乙</a
+                            >
+                            <a
+                                href="https://evil.example/company_basic.php?stk_code=9999"
+                                title="Injected Company"
+                                >Injected Company</a
+                            >
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="company"><b>本國上櫃公司(1家)</b></td>
+                        <td>
+                            <a
+                                href="company_basic.php?stk_code=9003"
+                                title="測試公司丙"
+                                >測試公司丙</a
+                            >
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="company"><b>知名外國企業(1家)</b></td>
+                        <td>
+                            <a
+                                href="company_basic.php?stk_code=9998"
+                                title="Foreign Glass"
+                                >Foreign Glass</a
+                            >
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        <div id="companyList_L610" title="測試製造" class="x-hidden">
+            <div class="company-list">
+                <table>
+                    <tr>
+                        <td class="company"><b>本國上市公司(1家)</b></td>
+                        <td>
+                            <a
+                                href="company_basic.php?stk_code=9004"
+                                title="測試公司丁"
+                                >測試公司丁</a
+                            >
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </body>
+</html>
