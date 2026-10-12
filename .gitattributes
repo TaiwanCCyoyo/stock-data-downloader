@@ -1,0 +1,16 @@
+# Maintained text uses LF without converting binary content.
+* text=auto eol=lf
+
+# Binary assets retain their original bytes.
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.webp -text
+*.ico -text
+*.pdf -text
+*.zip -text
+*.gz -text
+*.parquet -text
+*.sqlite -text
+*.bin -text
