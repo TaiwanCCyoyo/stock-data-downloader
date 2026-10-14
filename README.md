@@ -53,7 +53,7 @@ from missing worktree inputs.
 | `docs/`                         | [Operating guides, source evidence and document index](docs/README.md) |
 | `docs/contracts/`               | Current behavior contracts                                             |
 | `docs/decisions/legacy/`        | Retained historical records; implementation status unverified          |
-| `data/`                         | Acquired artifacts and evidence; preserve during cleanup               |
+| `data/`                         | Acquired artifacts and evidence (or `SHIOAJI_DATA_DIR`); preserve      |
 | `logs/`, `.tmp/`, `.worktrees/` | Local logs, handoffs/evidence and physical worktree snapshots          |
 | `cron/`                         | Windows scheduler launchers and installer                              |
 | Root configuration              | Python/dependencies/Ruff in `pyproject.toml`, formatting and Git hooks |

@@ -288,6 +288,7 @@ def main() -> None:
         "crawl every day TWSE history proves was a trading day and TPEx has no rows for.",
     )
     args = parser.parse_args()
+    logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     if args.max_consecutive_failures is not None and args.max_consecutive_failures <= 0:
         parser.error("--max-consecutive-failures must be a positive integer")
 

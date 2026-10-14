@@ -105,9 +105,16 @@ def resolve_backup_dir(explicit: str | Path | None = None) -> Path | None:
 
 
 def _assert_destination_outside(source: Path, dest_root: Path) -> None:
-    repo_root = source.parent
-    if dest_root == repo_root or repo_root in dest_root.parents:
-        raise BackupError(f"Backup destination {dest_root} is inside {repo_root}. A backup stored in the tree it backs up is not a backup.")
+    # The in-repository default cache shares its fate with the checkout around
+    # it, so that whole tree is excluded. A configured external data directory
+    # has no such enclosing tree; its parent may be a whole volume, which would
+    # refuse every destination on it.
+    guarded = [source, config.REPO_ROOT.resolve()]
+    if not (config.DATA_DIR_CONFIGURED and source == config.DATA_DIR):
+        guarded.append(source.parent)
+    for root in guarded:
+        if dest_root == root or root in dest_root.parents:
+            raise BackupError(f"Backup destination {dest_root} is inside {root}. A backup stored in the tree it backs up is not a backup.")
 
 
 # SQLite's -shm sidecar is shared memory, not data: it is rebuilt from the -wal
@@ -379,8 +386,9 @@ def main() -> int:
     setup_logging("backup_data.log")
     # Load .env here too, not only in run_daily: the documented standalone
     # usage (`uv run backup_data.py --archive`) has to see SHIOAJI_BACKUP_DIR
-    # the same way the scheduled run does, or it silently skips.
-    load_dotenv()
+    # the same way the scheduled run does, or it silently skips. This
+    # checkout's own file only; see config.ENV_FILE.
+    load_dotenv(config.ENV_FILE)
 
     parser = argparse.ArgumentParser(description="Mirror the data cache to a backup location outside this repository.")
     parser.add_argument("--backup-dir", default=None, help=f"Absolute path to the backup root. Defaults to ${BACKUP_DIR_ENV}.")

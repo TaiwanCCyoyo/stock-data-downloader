@@ -441,3 +441,43 @@ def test_importing_the_module_does_not_configure_logging(tmp_path: Path) -> None
     subprocess.run([sys.executable, "-c", "import backup_data"], cwd=tmp_path, env=env, check=True)
 
     assert not (tmp_path / "logs").exists()
+
+
+def _configure_external_data_dir(monkeypatch: pytest.MonkeyPatch, source: Path) -> None:
+    monkeypatch.setattr(backup_data.config, "DATA_DIR", source.resolve())
+    monkeypatch.setattr(backup_data.config, "DATA_DIR_CONFIGURED", True)
+
+
+def test_mirror_accepts_a_sibling_of_a_configured_external_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An external root's parent is not a checkout; it can be a whole volume."""
+    source = tmp_path / "volume" / "stock-data"
+    source.mkdir(parents=True)
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    copied, verified = mirror_data_cache(source, tmp_path / "volume" / "backup")
+
+    assert (copied, verified) == (1, 1)
+
+
+def test_mirror_refuses_a_destination_inside_a_configured_external_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "stock-data"
+    source.mkdir()
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    with pytest.raises(BackupError, match="is not a backup"):
+        mirror_data_cache(source, source / "backup")
+    assert not (source / "backup").exists()
+
+
+def test_mirror_refuses_a_destination_inside_the_checkout_for_an_external_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "stock-data"
+    source.mkdir()
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+    checkout = tmp_path / "checkout"
+    monkeypatch.setattr(backup_data.config, "REPO_ROOT", checkout)
+
+    with pytest.raises(BackupError, match="is not a backup"):
+        mirror_data_cache(source, checkout / "backup")

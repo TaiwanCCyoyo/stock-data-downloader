@@ -58,6 +58,7 @@ from fetch_monthly_revenue import refresh_latest as refresh_monthly_revenue
 from fetch_official_daily_price import run_fetch as run_official_daily_fetch
 from fetch_value_chain_classification import refresh_value_chain_classification
 
+from config import config
 from shp_utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -137,13 +138,15 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     setup_logging("run_daily.log")
     # Load .env up front rather than relying on a later step to do it, so
     # machine-local settings (SHIOAJI_BACKUP_DIR) are available to every step
-    # regardless of which ones run.
-    load_dotenv()
+    # regardless of which ones run. This checkout's own file only; see
+    # config.ENV_FILE.
+    load_dotenv(config.ENV_FILE)
 
     cache_failures: list[str] = []
     other_failures: list[str] = []
 
     logger.info("=== 日常更新作業開始 %s ===", datetime.datetime.now())
+    logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     logger.info("\n--- 步驟 1: 下載股票資料 ---")
     updated_symbol_count = 0
     try:

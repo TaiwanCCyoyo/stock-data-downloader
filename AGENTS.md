@@ -53,8 +53,10 @@ environment.
 - Run Python through uv: `uv sync`, then `uv run scripts/<name>.py`.
   Entry points live in `scripts/`, shared code in `shp_utils/`, defaults in
   `config/`, tests in `tests/`. See [pipeline commands](docs/pipeline.md).
-- Every default data path resolves through `config.config.DATA_DIR`, anchored
-  to `config.config.REPO_ROOT`. Never use CWD-relative data defaults.
+- Every default data path resolves through `config.config.DATA_DIR`: anchored
+  to `config.config.REPO_ROOT`, or an explicit external `SHIOAJI_DATA_DIR` read
+  from the process or the checkout's own `.env` (see [data location](docs/operations.md#data-location)).
+  Never use CWD-relative data defaults or search parent directories for `.env`.
 - Generic acquisition steps belong in `scripts/run_daily.py`. The official daily
   fetch must precede the parquet rebuild; see the [orchestration contract](docs/contracts/daily-update-orchestration/spec.md).
 - Keep scheduled CMD/VBS launchers and their installer in `cron/`.

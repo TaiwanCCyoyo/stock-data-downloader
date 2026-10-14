@@ -4,9 +4,10 @@
 
 ## Production data and worktrees
 
-The primary checkout's `data/` is the production source. All default paths resolve
-through `config.config.DATA_DIR`, anchored to that checkout's repository root.
-A worktree's `data/` is an independent physical snapshot. It may omit `raw/`,
+The primary checkout's data directory is the production source: `data/` by
+default, or the external directory its `.env` names (see
+[data location](#data-location)). All default paths resolve through
+`config.config.DATA_DIR`. A worktree's `data/` is an independent physical snapshot. It may omit `raw/`,
 minute CSVs and `official_daily.sqlite`; absence is not permission to delete,
 download or reconstruct production data. Never make a data symlink or junction.
 
@@ -21,6 +22,39 @@ production data, changing schemas, rebuilding databases, resetting progress or
 restoring an older snapshot over newer data. Describe the exact impact and obtain
 owner approval before those operations. Do not use `git clean -fdx`,
 `robocopy /MIR`, broad recursive deletion or stop processes owned by other sessions.
+
+## Data location
+
+`config.config.DATA_DIR` is `<checkout>/data` unless `SHIOAJI_DATA_DIR` names an
+external directory. The process environment wins over the checkout's own `.env`;
+the production checkout sets it in its private `.env`, which the scheduled
+launchers already load:
+
+```dotenv
+SHIOAJI_DATA_DIR=D:/StockData/stock-data-downloader
+```
+
+- A configured value must be an absolute, existing, link-free directory that
+  neither contains nor lies inside the checkout. Anything else stops every entry
+  point at import with `DataDirConfigError`; nothing falls back to `data/` and
+  nothing creates the directory, because a typo must not start re-downloading
+  quota-limited history into an empty folder.
+- Each checkout reads only its own `.env` (`config.ENV_FILE`), never one found by
+  searching parent directories. A development worktree under
+  `<primary>/.worktrees/<name>/` has no `.env`, so it keeps its own `data/`
+  snapshot and does not inherit the production data directory, backup
+  destination or credentials. Set the variable in a single process's environment
+  only for a deliberate, explicit run.
+- Do not set `SHIOAJI_DATA_DIR` as a user or machine environment variable: every
+  checkout and worktree would then write production data.
+- `data/stock_category.json5` is tracked with the code and stays in the checkout
+  when the data directory moves.
+- `run_daily.py` and `backfill_official_history.py` log the directory in use and
+  where its setting came from at the start of each run.
+- Moving an existing data directory is a production data operation: pause the
+  scheduled tasks, wait for writers to exit, checkpoint SQLite, move within the
+  same volume, verify, then set the variable. The backup mirror compares relative
+  paths, sizes and modification times, so a same-volume move does not recopy it.
 
 ## Windows scheduling
 
@@ -96,8 +130,8 @@ older checkpoint column names without migrating a database.
 
 The implementation is [scripts/backup_data.py](../scripts/backup_data.py); inspect
 its current options and behavior before backup or restore work. Configure an
-absolute destination outside this repository in the primary checkout's private
-`.env`:
+absolute destination outside this repository and outside the data directory in
+the primary checkout's private `.env`:
 
 ```dotenv
 SHIOAJI_BACKUP_DIR=D:/StockDataBackup
