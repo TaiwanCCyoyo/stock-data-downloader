@@ -77,7 +77,8 @@ The backup destination MUST come from an explicit `--backup-dir` argument or the
 destination inside the repository or inside the data directory being backed up,
 since a backup stored in the tree it protects shares that tree's fate. When the data
 directory is configured outside the repository (`SHIOAJI_DATA_DIR`), its parent is
-not treated as that tree.
+not treated as that tree. The mirror location (`<destination>/data`) MUST NOT equal,
+contain or lie inside the data directory, for mirroring and for verification.
 
 #### Scenario: No destination configured
 

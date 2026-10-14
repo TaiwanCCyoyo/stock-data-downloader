@@ -206,3 +206,11 @@ def test_a_bad_value_stops_every_entry_point_at_import(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "DataDirConfigError" in result.stderr
     assert not (tmp_path / "typo").exists()
+
+
+def test_a_bare_key_in_the_env_file_fails_instead_of_meaning_unset(checkout: Path) -> None:
+    """python-dotenv parses a line without `=` as None; that is a broken setting."""
+    (checkout / ".env").write_text(f"API_KEY=x\n{DATA_DIR_ENV}\n", encoding="utf-8")
+
+    with pytest.raises(DataDirConfigError, match="set but empty"):
+        resolve_data_dir({}, checkout)

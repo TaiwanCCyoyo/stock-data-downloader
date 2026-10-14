@@ -481,3 +481,16 @@ def test_mirror_refuses_a_destination_inside_the_checkout_for_an_external_source
 
     with pytest.raises(BackupError, match="is not a backup"):
         mirror_data_cache(source, checkout / "backup")
+
+
+def test_a_mirror_landing_on_a_configured_external_source_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dest/data == source would copy nothing and verify the cache against itself."""
+    source = tmp_path / "stock" / "data"
+    source.mkdir(parents=True)
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    with pytest.raises(BackupError, match="overlaps the data directory"):
+        mirror_data_cache(source, tmp_path / "stock")
+    with pytest.raises(BackupError, match="overlaps the data directory"):
+        run_backup(tmp_path / "stock", data_dir=source, verify_only=True)

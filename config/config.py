@@ -40,9 +40,11 @@ def _configured_value(environ: Mapping[str, str], env_file: Path) -> tuple[str |
     if value is not None:
         return value, "environment"
     if env_file.is_file():
-        value = dotenv_values(env_file).get(DATA_DIR_ENV)
-        if value is not None:
-            return value, str(env_file)
+        values = dotenv_values(env_file)
+        if DATA_DIR_ENV in values:
+            # A bare `SHIOAJI_DATA_DIR` line (no `=`) parses as None; it is a
+            # broken setting, not an absent one, so it must not fall back.
+            return values[DATA_DIR_ENV] or "", str(env_file)
     return None, "default"
 
 

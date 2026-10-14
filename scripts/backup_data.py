@@ -115,6 +115,12 @@ def _assert_destination_outside(source: Path, dest_root: Path) -> None:
     for root in guarded:
         if dest_root == root or root in dest_root.parents:
             raise BackupError(f"Backup destination {dest_root} is inside {root}. A backup stored in the tree it backs up is not a backup.")
+    # The mirror itself lands in <dest_root>/data. If that is the source, or
+    # either contains the other, every file "already exists" and verification
+    # compares the cache with itself -- a reported success with no backup.
+    dest_data = dest_root / "data"
+    if dest_data == source or source in dest_data.parents or dest_data in source.parents:
+        raise BackupError(f"Backup mirror {dest_data} overlaps the data directory {source}. A backup stored in the tree it backs up is not a backup.")
 
 
 # SQLite's -shm sidecar is shared memory, not data: it is rebuilt from the -wal
@@ -370,6 +376,7 @@ def run_backup(
     source = Path(data_dir or config.DATA_DIR).resolve()
 
     if verify_only:
+        _assert_destination_outside(source, dest_root)
         dest_data = dest_root / "data"
         _raise_for_problems(verify_mirror(source, dest_data), dest_data)
         logger.info("backup verification OK against %s", dest_data)
