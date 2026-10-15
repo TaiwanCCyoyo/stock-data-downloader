@@ -181,15 +181,15 @@ print(json.dumps({"data": {k: str(v) for k, v in paths.items()}, "category": str
 """
 
 
-def _probe(value: str) -> subprocess.CompletedProcess[str]:
+def _probe(value: str, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if k != DATA_DIR_ENV}
     env[DATA_DIR_ENV] = value
-    return subprocess.run([sys.executable, "-c", _PROBE, str(REPO_ROOT)], env=env, capture_output=True, text=True, check=False)
+    return subprocess.run([sys.executable, "-c", _PROBE, str(REPO_ROOT)], cwd=cwd, env=env, capture_output=True, text=True, check=False)
 
 
-def test_every_pipeline_default_follows_a_configured_root(external: Path) -> None:
+def test_every_pipeline_default_follows_a_configured_root(external: Path, tmp_path: Path) -> None:
     """The constants bind at import, so only a fresh interpreter shows the real wiring."""
-    result = _probe(str(external))
+    result = _probe(str(external), cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
 
@@ -197,7 +197,7 @@ def test_every_pipeline_default_follows_a_configured_root(external: Path) -> Non
     for name, value in report["data"].items():
         resolved = Path(value)
         assert resolved == root or root in resolved.parents, f"{name} does not follow {DATA_DIR_ENV}: {resolved}"
-    assert Path(report["category"]) == REPO_ROOT / "data" / "stock_category.json5"
+    assert Path(report["category"]) == REPO_ROOT / "config" / "stock_category.json5"
 
 
 def test_a_bad_value_stops_every_entry_point_at_import(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@
 
 The primary checkout's data directory is the production source: `data/` by
 default, or the external directory its `.env` names (see
-[data location](#data-location)). All default paths resolve through
+[data location](#data-location)). All mutable data defaults resolve through
 `config.config.DATA_DIR`. A worktree's `data/` is an independent physical snapshot. It may omit `raw/`,
 minute CSVs and `official_daily.sqlite`; absence is not permission to delete,
 download or reconstruct production data. Never make a data symlink or junction.
@@ -47,8 +47,19 @@ SHIOAJI_DATA_DIR=D:/StockData/stock-data-downloader
   only for a deliberate, explicit run.
 - Do not set `SHIOAJI_DATA_DIR` as a user or machine environment variable: every
   checkout and worktree would then write production data.
-- `data/stock_category.json5` is tracked with the code and stays in the checkout
-  when the data directory moves.
+- `config/stock_category.json5` is tracked configuration, packaged beside
+  `config.py` in the wheel. `config.STOCK_CATEGORY` always reads that resource,
+  independently of the working directory and the configured data root.
+- `stock_symbol_mapping.json5` is downloaded data at
+  `config.STOCK_SYMBOL_MAPPING = DATA_DIR / "stock_symbol_mapping.json5"`.
+  Both the writer and its existing-mapping shrink guard read that same path.
+  With the setting above this is
+  `D:/StockData/stock-data-downloader/stock_symbol_mapping.json5`. Consumers use
+  this filename under the same shared root, without creating another root or
+  relying on `<checkout>/data`. No separate mapping setting is needed.
+- Updating the code moves only the tracked category resource. It does not move
+  acquired data or remove old category/mapping copies in data roots or backups;
+  preserve and report any such copies rather than overwriting or deleting them.
 - `run_daily.py` and `backfill_official_history.py` log the directory in use and
   where its setting came from at the start of each run.
 - Moving an existing data directory is a production data operation: pause the
@@ -171,6 +182,10 @@ These archives exclude `official_daily.sqlite`, `monthly_revenue.sqlite`,
 `institutional.sqlite` and revenue/institutional raw responses. The mirror is their
 local backup tier; a worktree archive is not a full production-data backup.
 Raw observations cannot be recreated with their original observation time.
+
+The downloaded `stock_symbol_mapping.json5` remains covered by both the data
+mirror and the `*.json5` daily archive rule. The tracked category dictionary is
+distributed through Git and the wheel, outside the mutable data backup scope.
 
 Archives do not lock the mirror. Avoid another backup updating it during archiving;
 using a verified mirror alone does not guarantee immutability. Repeating archive

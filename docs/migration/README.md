@@ -28,7 +28,7 @@ The complete industry-name dictionary, source URLs and historical source reports
 ## Publication review still required
 
 The Apache 2.0 code license does not establish market-data redistribution rights.
-Removing `data.zip` is not proof of publication safety. `data/stock_category.json5`,
+Removing `data.zip` is not proof of publication safety. `config/stock_category.json5`,
 source field/schema descriptions, retained historical evidence discussions and any
 remaining embedded third-party examples are individually inventoried for attribution/licensing review before
 public release. Fixture rewriting is not a full legal or secret audit.

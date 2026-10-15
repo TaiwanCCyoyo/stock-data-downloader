@@ -23,7 +23,11 @@ uv run pre-commit install
 
 For production acquisition, copy `.env.example` to `.env` only if no `.env`
 already exists, then configure credentials privately. Never commit or print them.
-`data/stock_category.json5` supplies the download category mapping.
+`config/stock_category.json5` supplies the versioned download category mapping
+and ships with the wheel. It stays beside the code regardless of `SHIOAJI_DATA_DIR`.
+The downloaded `stock_symbol_mapping.json5` lives under `config.config.DATA_DIR`
+with the other acquired artifacts; configure the existing `SHIOAJI_DATA_DIR`
+setting to use a shared external root. See [data location](docs/operations.md#data-location).
 
 ## 🚀 Quick Start
 

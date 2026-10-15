@@ -92,7 +92,7 @@ def ensure_data_dir() -> Path:
 # STOCK_CATEGORY 用於定義預設的股票類型對照表。
 # It is tracked with the code rather than acquired, so it stays in the checkout
 # when DATA_DIR is configured elsewhere.
-STOCK_CATEGORY = REPO_ROOT / "data" / "stock_category.json5"
+STOCK_CATEGORY = REPO_ROOT / "config" / "stock_category.json5"
 
 # STOCK_SYMBOL_MAPPING  用於定義預設的股票股號對照表
 STOCK_SYMBOL_MAPPING = DATA_DIR / "stock_symbol_mapping.json5"
