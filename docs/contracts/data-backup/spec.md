@@ -78,7 +78,9 @@ destination inside the repository or inside the data directory being backed up,
 since a backup stored in the tree it protects shares that tree's fate. When the data
 directory is configured outside the repository (`SHIOAJI_DATA_DIR`), its parent is
 not treated as that tree. The mirror location (`<destination>/data`) MUST NOT equal,
-contain or lie inside the data directory, for mirroring and for verification.
+contain or lie inside the data directory, for mirroring and for verification. The
+check compares resolved locations as well as spelled paths, and a mirror directory
+that is itself a link or reparse point is refused.
 
 #### Scenario: No destination configured
 

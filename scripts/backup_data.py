@@ -112,15 +112,24 @@ def _assert_destination_outside(source: Path, dest_root: Path) -> None:
     guarded = [source, config.REPO_ROOT.resolve()]
     if not (config.DATA_DIR_CONFIGURED and source == config.DATA_DIR):
         guarded.append(source.parent)
+    # Compare where the paths actually lead as well as how they are spelled:
+    # a junction or symlink anywhere on the destination side can alias it onto
+    # the source while the spelled paths look unrelated.
+    real_dest_root = dest_root.resolve()
     for root in guarded:
-        if dest_root == root or root in dest_root.parents:
-            raise BackupError(f"Backup destination {dest_root} is inside {root}. A backup stored in the tree it backs up is not a backup.")
+        for candidate in (dest_root, real_dest_root):
+            if candidate == root or root in candidate.parents:
+                raise BackupError(f"Backup destination {dest_root} is inside {root}. A backup stored in the tree it backs up is not a backup.")
     # The mirror itself lands in <dest_root>/data. If that is the source, or
     # either contains the other, every file "already exists" and verification
     # compares the cache with itself -- a reported success with no backup.
     dest_data = dest_root / "data"
-    if dest_data == source or source in dest_data.parents or dest_data in source.parents:
-        raise BackupError(f"Backup mirror {dest_data} overlaps the data directory {source}. A backup stored in the tree it backs up is not a backup.")
+    if os.path.lexists(dest_data) and _is_link_or_reparse(dest_data):
+        raise BackupError(f"Backup mirror {dest_data} is a link or reparse point; a mirror must be a real directory, not an alias.")
+    real_source = source.resolve()
+    for mirror, data in ((dest_data, source), (dest_data.resolve(), real_source)):
+        if mirror == data or data in mirror.parents or mirror in data.parents:
+            raise BackupError(f"Backup mirror {dest_data} overlaps the data directory {source}. A backup stored in the tree it backs up is not a backup.")
 
 
 # SQLite's -shm sidecar is shared memory, not data: it is rebuilt from the -wal
