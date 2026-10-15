@@ -24,6 +24,7 @@ import fetch_monthly_revenue
 import fetch_official_daily_price
 import fetch_symbol_meta
 import fetch_value_chain_classification
+import pytest
 
 from config import config
 
@@ -31,7 +32,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_PATHS = {
     "config.DATA_DIR": config.DATA_DIR,
-    "config.STOCK_CATEGORY": config.STOCK_CATEGORY,
     "config.STOCK_SYMBOL_MAPPING": config.STOCK_SYMBOL_MAPPING,
     "build_price_parquet.DEFAULT_DATA_PATH": build_price_parquet.DEFAULT_DATA_PATH,
     "check_data_integrity.DEFAULT_DATA_PATH": check_data_integrity.DEFAULT_DATA_PATH,
@@ -98,6 +98,9 @@ def test_every_default_path_is_absolute() -> None:
 
 
 def test_every_default_path_is_under_the_repository_root() -> None:
+    """Unless the data directory is deliberately configured elsewhere; see test_data_dir_config."""
+    if config.DATA_DIR_CONFIGURED:
+        pytest.skip(f"{config.DATA_DIR_ENV} selects {config.DATA_DIR} ({config.DATA_DIR_SOURCE})")
     for name, value in DEFAULT_PATHS.items():
         resolved = Path(value).resolve()
         assert REPO_ROOT in resolved.parents or resolved == REPO_ROOT, f"{name} escapes the repository root: {resolved}"
@@ -108,6 +111,23 @@ def test_every_default_path_lives_under_the_one_data_directory() -> None:
     for name, value in DEFAULT_PATHS.items():
         resolved = Path(value).resolve()
         assert resolved == data_dir or data_dir in resolved.parents, f"{name} resolves outside {data_dir}: {resolved}"
+
+
+def test_the_tracked_category_table_stays_in_the_checkout() -> None:
+    """It ships with the code, so it must not move with a configured DATA_DIR."""
+    assert config.STOCK_CATEGORY == REPO_ROOT / "data" / "stock_category.json5"
+    assert config.STOCK_CATEGORY.is_file()
+
+
+def test_no_entry_point_searches_upward_for_an_env_file() -> None:
+    """A bare load_dotenv() walks up from the script, so a worktree nested under
+    the primary checkout would load the primary's production settings."""
+    offenders = []
+    for source in sorted((REPO_ROOT / "scripts").glob("*.py")):
+        for lineno, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+            if "load_dotenv()" in line or "find_dotenv(" in line:
+                offenders.append(f"{source.name}:{lineno}: {line.strip()}")
+    assert not offenders, "load the checkout's own config.ENV_FILE explicitly:\n" + "\n".join(offenders)
 
 
 def test_paths_do_not_move_when_the_working_directory_changes(tmp_path: Path) -> None:

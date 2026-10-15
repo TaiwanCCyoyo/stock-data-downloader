@@ -74,8 +74,13 @@ bad copy when the source has not advanced since that copy was taken.
 
 The backup destination MUST come from an explicit `--backup-dir` argument or the
 `SHIOAJI_BACKUP_DIR` environment variable, with no default. The system MUST refuse a
-destination inside the repository being backed up, since a backup stored in the tree
-it protects shares that tree's fate.
+destination inside the repository or inside the data directory being backed up,
+since a backup stored in the tree it protects shares that tree's fate. When the data
+directory is configured outside the repository (`SHIOAJI_DATA_DIR`), its parent is
+not treated as that tree. The mirror location (`<destination>/data`) MUST NOT equal,
+contain or lie inside the data directory, for mirroring and for verification. The
+check compares resolved locations as well as spelled paths, and a mirror directory
+that is itself a link or reparse point is refused.
 
 #### Scenario: No destination configured
 
@@ -85,7 +90,8 @@ it protects shares that tree's fate.
 
 #### Scenario: Destination inside the repository
 
-- **WHEN** the destination resolves to a path inside the repository
+- **WHEN** the destination resolves to a path inside the repository or the data
+  directory
 - **THEN** the run MUST fail and say why
 
 ### Requirement: Offsite archives are split by data type

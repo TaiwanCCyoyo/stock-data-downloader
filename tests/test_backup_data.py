@@ -441,3 +441,110 @@ def test_importing_the_module_does_not_configure_logging(tmp_path: Path) -> None
     subprocess.run([sys.executable, "-c", "import backup_data"], cwd=tmp_path, env=env, check=True)
 
     assert not (tmp_path / "logs").exists()
+
+
+def _configure_external_data_dir(monkeypatch: pytest.MonkeyPatch, source: Path) -> None:
+    monkeypatch.setattr(backup_data.config, "DATA_DIR", source.resolve())
+    monkeypatch.setattr(backup_data.config, "DATA_DIR_CONFIGURED", True)
+
+
+def test_mirror_accepts_a_sibling_of_a_configured_external_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An external root's parent is not a checkout; it can be a whole volume."""
+    source = tmp_path / "volume" / "stock-data"
+    source.mkdir(parents=True)
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    copied, verified = mirror_data_cache(source, tmp_path / "volume" / "backup")
+
+    assert (copied, verified) == (1, 1)
+
+
+def test_mirror_refuses_a_destination_inside_a_configured_external_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "stock-data"
+    source.mkdir()
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    with pytest.raises(BackupError, match="is not a backup"):
+        mirror_data_cache(source, source / "backup")
+    assert not (source / "backup").exists()
+
+
+def test_mirror_refuses_a_destination_inside_the_checkout_for_an_external_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "stock-data"
+    source.mkdir()
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+    checkout = tmp_path / "checkout"
+    monkeypatch.setattr(backup_data.config, "REPO_ROOT", checkout)
+
+    with pytest.raises(BackupError, match="is not a backup"):
+        mirror_data_cache(source, checkout / "backup")
+
+
+def test_a_mirror_landing_on_a_configured_external_source_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dest/data == source would copy nothing and verify the cache against itself."""
+    source = tmp_path / "stock" / "data"
+    source.mkdir(parents=True)
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+
+    with pytest.raises(BackupError, match="overlaps the data directory"):
+        mirror_data_cache(source, tmp_path / "stock")
+    with pytest.raises(BackupError, match="overlaps the data directory"):
+        run_backup(tmp_path / "stock", data_dir=source, verify_only=True)
+
+
+def _junction(target: Path, link: Path) -> None:
+    import _winapi
+
+    _winapi.CreateJunction(str(target), str(link))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions are Windows-only")
+@pytest.mark.parametrize("verify_only", [False, True])
+def test_a_mirror_junctioned_onto_the_source_is_refused(data_dir: Path, tmp_path: Path, verify_only: bool) -> None:
+    """<backup>/data as a junction to the source would verify the cache against itself."""
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    _junction(data_dir, backup / "data")
+    before = sorted(p.relative_to(data_dir) for p in data_dir.rglob("*"))
+    try:
+        with pytest.raises(BackupError, match="link or reparse point"):
+            run_backup(backup, data_dir=data_dir, verify_only=verify_only)
+    finally:
+        os.rmdir(backup / "data")  # removes the junction itself, never its target
+    assert sorted(p.relative_to(data_dir) for p in data_dir.rglob("*")) == before
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions are Windows-only")
+@pytest.mark.parametrize("verify_only", [False, True])
+def test_a_backup_root_junctioned_so_its_mirror_is_the_source_is_refused(data_dir: Path, tmp_path: Path, verify_only: bool) -> None:
+    """A junctioned backup root whose data/ child is really the source: caught by resolving."""
+    backup = tmp_path / "backup alias"
+    _junction(data_dir.parent, backup)
+    try:
+        with pytest.raises(BackupError, match="is not a backup"):
+            run_backup(backup, data_dir=data_dir, verify_only=verify_only)
+    finally:
+        os.rmdir(backup)
+    assert (data_dir / "2330_day.csv").read_text(encoding="utf-8") == "day bars\n"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions are Windows-only")
+@pytest.mark.parametrize("verify_only", [False, True])
+def test_an_aliased_backup_root_for_an_external_source_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verify_only: bool) -> None:
+    """An external root's parent is not guarded, so only resolving the mirror catches this alias."""
+    source = tmp_path / "volume" / "data"
+    source.mkdir(parents=True)
+    (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
+    _configure_external_data_dir(monkeypatch, source)
+    backup = tmp_path / "backup alias"
+    _junction(source.parent, backup)
+    try:
+        with pytest.raises(BackupError, match="overlaps the data directory"):
+            mirror_data_cache(source, backup) if not verify_only else run_backup(backup, data_dir=source, verify_only=True)
+    finally:
+        os.rmdir(backup)
+    assert sorted(p.name for p in source.iterdir()) == ["2330_day.csv"]

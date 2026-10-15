@@ -105,9 +105,31 @@ def resolve_backup_dir(explicit: str | Path | None = None) -> Path | None:
 
 
 def _assert_destination_outside(source: Path, dest_root: Path) -> None:
-    repo_root = source.parent
-    if dest_root == repo_root or repo_root in dest_root.parents:
-        raise BackupError(f"Backup destination {dest_root} is inside {repo_root}. A backup stored in the tree it backs up is not a backup.")
+    # The in-repository default cache shares its fate with the checkout around
+    # it, so that whole tree is excluded. A configured external data directory
+    # has no such enclosing tree; its parent may be a whole volume, which would
+    # refuse every destination on it.
+    guarded = [source, config.REPO_ROOT.resolve()]
+    if not (config.DATA_DIR_CONFIGURED and source == config.DATA_DIR):
+        guarded.append(source.parent)
+    # Compare where the paths actually lead as well as how they are spelled:
+    # a junction or symlink anywhere on the destination side can alias it onto
+    # the source while the spelled paths look unrelated.
+    real_dest_root = dest_root.resolve()
+    for root in guarded:
+        for candidate in (dest_root, real_dest_root):
+            if candidate == root or root in candidate.parents:
+                raise BackupError(f"Backup destination {dest_root} is inside {root}. A backup stored in the tree it backs up is not a backup.")
+    # The mirror itself lands in <dest_root>/data. If that is the source, or
+    # either contains the other, every file "already exists" and verification
+    # compares the cache with itself -- a reported success with no backup.
+    dest_data = dest_root / "data"
+    if os.path.lexists(dest_data) and _is_link_or_reparse(dest_data):
+        raise BackupError(f"Backup mirror {dest_data} is a link or reparse point; a mirror must be a real directory, not an alias.")
+    real_source = source.resolve()
+    for mirror, data in ((dest_data, source), (dest_data.resolve(), real_source)):
+        if mirror == data or data in mirror.parents or mirror in data.parents:
+            raise BackupError(f"Backup mirror {dest_data} overlaps the data directory {source}. A backup stored in the tree it backs up is not a backup.")
 
 
 # SQLite's -shm sidecar is shared memory, not data: it is rebuilt from the -wal
@@ -363,6 +385,7 @@ def run_backup(
     source = Path(data_dir or config.DATA_DIR).resolve()
 
     if verify_only:
+        _assert_destination_outside(source, dest_root)
         dest_data = dest_root / "data"
         _raise_for_problems(verify_mirror(source, dest_data), dest_data)
         logger.info("backup verification OK against %s", dest_data)
@@ -379,8 +402,9 @@ def main() -> int:
     setup_logging("backup_data.log")
     # Load .env here too, not only in run_daily: the documented standalone
     # usage (`uv run backup_data.py --archive`) has to see SHIOAJI_BACKUP_DIR
-    # the same way the scheduled run does, or it silently skips.
-    load_dotenv()
+    # the same way the scheduled run does, or it silently skips. This
+    # checkout's own file only; see config.ENV_FILE.
+    load_dotenv(config.ENV_FILE)
 
     parser = argparse.ArgumentParser(description="Mirror the data cache to a backup location outside this repository.")
     parser.add_argument("--backup-dir", default=None, help=f"Absolute path to the backup root. Defaults to ${BACKUP_DIR_ENV}.")

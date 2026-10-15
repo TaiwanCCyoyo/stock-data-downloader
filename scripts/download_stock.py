@@ -327,7 +327,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
     have nothing new to process, such as the daily-bar conversion, on a day
     with zero new data (non-trading day, quota exhausted, etc.).
     """
-    load_dotenv()
+    load_dotenv(config.ENV_FILE)
     target_codes = normalize_codes(codes)
     updated_symbol_count = 0
 
@@ -383,9 +383,8 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
         pacer = RequestPacer()
         last_usage_check = 0.0
 
-        # Create the data directory
-        if not os.path.exists(config.DATA_DIR):
-            os.makedirs(config.DATA_DIR)
+        # Creates only the in-repository default; a configured root must already exist.
+        config.ensure_data_dir()
 
         for contract in contract_list:
             stock_file = f"{config.DATA_DIR}/{contract.code}_min.csv"
