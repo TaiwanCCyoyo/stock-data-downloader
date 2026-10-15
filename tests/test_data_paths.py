@@ -24,6 +24,7 @@ import fetch_monthly_revenue
 import fetch_official_daily_price
 import fetch_symbol_meta
 import fetch_value_chain_classification
+import json5
 import pytest
 
 from config import config
@@ -115,8 +116,11 @@ def test_every_default_path_lives_under_the_one_data_directory() -> None:
 
 def test_the_tracked_category_table_stays_in_the_checkout() -> None:
     """It ships with the code, so it must not move with a configured DATA_DIR."""
-    assert config.STOCK_CATEGORY == REPO_ROOT / "data" / "stock_category.json5"
+    assert config.STOCK_CATEGORY == REPO_ROOT / "config" / "stock_category.json5"
     assert config.STOCK_CATEGORY.is_file()
+    category = json5.loads(config.STOCK_CATEGORY.read_text(encoding="utf-8"))
+    assert isinstance(category, dict)
+    assert category["TSE"]["00"] == category["OTC"]["00"] == "期權"
 
 
 def test_no_entry_point_searches_upward_for_an_env_file() -> None:

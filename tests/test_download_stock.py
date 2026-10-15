@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import download_stock
+import json5
 import pandas as pd
 import pytest
 from shioaji.contracts import FetchStatus
@@ -132,11 +133,10 @@ class FakeApi:
 
 @pytest.fixture
 def isolated_download_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Point download_stock at a scratch data dir and fake credentials/category file."""
+    """Use scratch data and fake credentials, keeping the shipped category resource."""
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("SECRET_KEY", "test-secret")
     monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(config, "STOCK_CATEGORY", str(tmp_path / "stock_category.json5"))
     monkeypatch.setattr(config, "STOCK_SYMBOL_MAPPING", str(tmp_path / "stock_symbol_mapping.json5"))
     # The real inter-request floor exists to keep a live session alive; against
     # a fake API it would only add minutes to the suite. The pacing test sets
@@ -297,7 +297,8 @@ def test_tracked_etf_survives_the_warrant_category_filter():
             Indexs=SimpleNamespace(TSE={}),
         )
     )
-    stock_category = {"TSE": {"00": "期權", "24": "半導體業"}, "OTC": {}}
+    stock_category = json5.loads(config.STOCK_CATEGORY.read_text(encoding="utf-8"))
+    assert isinstance(stock_category, dict)
 
     codes = [c.code for c in download_stock.get_contract_list(cast(download_stock.sj.Shioaji, api), stock_category)]
 

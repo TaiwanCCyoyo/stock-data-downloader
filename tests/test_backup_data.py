@@ -28,7 +28,7 @@ def data_dir(tmp_path: Path) -> Path:
     source.mkdir(parents=True)
     (source / "2330_day.csv").write_text("day bars\n", encoding="utf-8")
     (source / "2330_min.csv").write_text("minute bars\n", encoding="utf-8")
-    (source / "stock_category.json5").write_text("{}\n", encoding="utf-8")
+    (source / "stock_symbol_mapping.json5").write_text('{"2330": "Example Co"}\n', encoding="utf-8")
     (source / "corporate_actions.sqlite").write_text("corporate actions\n", encoding="utf-8")
     (source / "monthly_revenue.sqlite").write_text("monthly revenue\n", encoding="utf-8")
     (source / "symbol_meta.sqlite").write_text("symbol meta\n", encoding="utf-8")
@@ -47,6 +47,7 @@ def test_mirror_copies_every_file_including_subdirectories(data_dir: Path, tmp_p
     assert verified == 8
     assert (dest / "data" / "2330_day.csv").read_text(encoding="utf-8") == "day bars\n"
     assert (dest / "data" / "raw" / "staging.json").is_file()
+    assert (dest / "data" / "stock_symbol_mapping.json5").read_bytes() == (data_dir / "stock_symbol_mapping.json5").read_bytes()
 
 
 def _pretend_link(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
@@ -198,7 +199,7 @@ def test_archives_split_daily_and_minute_bars(data_dir: Path, tmp_path: Path) ->
     assert names == {"data_day_2026Q3.tar.gz", "data_min_2026Q3.tar.gz", "data_meta_2026Q3.tar.gz"}
 
     with tarfile.open(dest / "archive" / "data_day_2026Q3.tar.gz") as tar:
-        assert sorted(tar.getnames()) == ["2330_day.csv", "stock_category.json5"]
+        assert sorted(tar.getnames()) == ["2330_day.csv", "stock_symbol_mapping.json5"]
     with tarfile.open(dest / "archive" / "data_min_2026Q3.tar.gz") as tar:
         assert tar.getnames() == ["2330_min.csv"]
 
