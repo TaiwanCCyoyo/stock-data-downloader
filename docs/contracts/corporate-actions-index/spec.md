@@ -75,3 +75,29 @@ event type does not occur. Such a source MUST remain registered and queried.
 - **THEN** the system MUST continue to query it on subsequent runs
 - **AND** local coverage inspection MUST be able to report it as registered-but-unobserved
   rather than silently indistinguishable from a source that was never configured.
+
+### Requirement: Supplement terms are additive and source-faithful
+
+The system MUST import a published supplement batch into `corporate_action_terms`,
+`trading_interruptions`, `corporate_action_source_documents` and
+`corporate_action_supplement_batches` without reading or changing `corporate_actions` or
+`corporate_action_raw_ranges`. Each source's stated value MUST be kept as its own row in
+source units, without choosing between, rounding or averaging disagreeing sources, and
+without deriving factors or effective dates. See [supplement batches](../../corporate-action-supplements.md).
+
+#### Scenario: Import a verified batch
+
+- **WHEN** `import_corporate_action_supplement.py --batch <id>` runs outside the weekday 18:00–18:45 window
+- **THEN** it MUST verify every member's bytes and SHA-256 against `publication.json` before extracting
+- **AND** it MUST write the batch in one transaction, recording blank, missing and unsupported terms with a NULL value.
+
+#### Scenario: Re-import a batch
+
+- **WHEN** a batch id is already imported
+- **THEN** identical content MUST be a no-op
+- **AND** different content MUST be refused, leaving the stored rows unchanged.
+
+#### Scenario: A transcription disagrees with its parsed source
+
+- **WHEN** a curated fact cites only documents a parser reads, and its value differs from the parsed value
+- **THEN** the import MUST stop without writing.
