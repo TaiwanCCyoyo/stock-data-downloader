@@ -175,6 +175,7 @@ uv run scripts/fetch_corporate_actions.py fetch
 uv run scripts/fetch_corporate_actions.py fetch --source twtcau --start-date 20250501 --end-date 20250630
 uv run scripts/fetch_corporate_actions.py fetch --source twtauu --start-date 20220901 --end-date 20220930
 uv run scripts/fetch_corporate_actions.py status --code 0050
+uv run scripts/import_corporate_action_supplement.py --batch <batch_id> --dry-run
 ```
 
 `fetch_dividends.py` (yfinance-based dividend fallback, `data/dividends/*.csv` /

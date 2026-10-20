@@ -38,18 +38,19 @@ These guides retain their existing paths and source-specific details. Related
 Historical records remain under `docs/decisions/legacy/`; their presence does not
 authorize a new capture or production refresh.
 
-| Subject                                | Guide                                                   |
-| -------------------------------------- | ------------------------------------------------------- |
-| Institutional reports and availability | [institutional-sources](institutional-sources.md)       |
-| TPEx history and roster definitions    | [tpex-history-sources](tpex-history-sources.md)         |
-| TWSE dated whole-market quotes         | [twse-market-day-source](twse-market-day-source.md)     |
-| 2026-10-04 official data repair        | [data-gap-repair-20261004](data-gap-repair-20261004.md) |
-| Explicit official price exports        | [official-price-slices](official-price-slices.md)       |
-| Corporate-detail selection and capture | [corporate-detail-capture](corporate-detail-capture.md) |
-| MOPS dividend raw evidence             | [mops-dividend-evidence](mops-dividend-evidence.md)     |
-| Dividend statement normalization       | [mops-dividend-statements](mops-dividend-statements.md) |
-| MOPS material announcements            | [mops-material-evidence](mops-material-evidence.md)     |
-| Rights subscriptions                   | [mops-rights-evidence](mops-rights-evidence.md)         |
-| Annual cash distributions              | [annual-cash-evidence](annual-cash-evidence.md)         |
-| Free-share observations                | [free-share-evidence](free-share-evidence.md)           |
-| Par-value observations                 | [par-value-evidence](par-value-evidence.md)             |
+| Subject                                | Guide                                                           |
+| -------------------------------------- | --------------------------------------------------------------- |
+| Institutional reports and availability | [institutional-sources](institutional-sources.md)               |
+| TPEx history and roster definitions    | [tpex-history-sources](tpex-history-sources.md)                 |
+| TWSE dated whole-market quotes         | [twse-market-day-source](twse-market-day-source.md)             |
+| 2026-10-04 official data repair        | [data-gap-repair-20261004](data-gap-repair-20261004.md)         |
+| Explicit official price exports        | [official-price-slices](official-price-slices.md)               |
+| Corporate-detail selection and capture | [corporate-detail-capture](corporate-detail-capture.md)         |
+| MOPS dividend raw evidence             | [mops-dividend-evidence](mops-dividend-evidence.md)             |
+| Dividend statement normalization       | [mops-dividend-statements](mops-dividend-statements.md)         |
+| MOPS material announcements            | [mops-material-evidence](mops-material-evidence.md)             |
+| Rights subscriptions                   | [mops-rights-evidence](mops-rights-evidence.md)                 |
+| Annual cash distributions              | [annual-cash-evidence](annual-cash-evidence.md)                 |
+| Free-share observations                | [free-share-evidence](free-share-evidence.md)                   |
+| Par-value observations                 | [par-value-evidence](par-value-evidence.md)                     |
+| Supplement batches → terms, halts      | [corporate-action-supplements](corporate-action-supplements.md) |
