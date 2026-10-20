@@ -401,9 +401,19 @@ def _twse_detail(batch: Batch, base: str, sources: dict[str, dict[str, Any]], ro
             raise SupplementError(f"TWSE detail body is not the receipted response: {member}")
         packet = _json(body, member)
         fields, data = packet.get("fields"), packet.get("data")
-        if packet.get("stat") != "ok" or tuple(fields or ()) != DETAIL_FIELDS["twt49u"] or not isinstance(data, list) or len(data) != 1:
+        # Same acceptance as the capture tool: the field set, in any order, read by name.
+        if (
+            packet.get("stat") != "ok"
+            or not isinstance(fields, list)
+            or len(fields) != len(set(fields))
+            or set(fields) != set(DETAIL_FIELDS["twt49u"])
+            or not isinstance(data, list)
+            or len(data) != 1
+            or not isinstance(data[0], list)
+            or len(data[0]) != len(fields)
+        ):
             raise SupplementError(f"unexpected TWT49U detail shape: {member}")
-        literals: dict[str, Any] = dict(zip(DETAIL_FIELDS["twt49u"], data[0], strict=True))
+        literals: dict[str, Any] = dict(zip(fields, data[0], strict=True))
         code = str(literals["股票代號"]).strip()
         if code != request.get("code") or code != event.get("code"):
             raise SupplementError(f"TWT49U detail code mismatch: {member}")
@@ -443,13 +453,16 @@ def _tpex_exdailyq(batch: Batch, base: str, manifest: dict[str, Any], sources: d
     if not isinstance(tables, list) or len(tables) != 1:
         raise SupplementError(f"exDailyQ needs one table: {member}")
     fields, data = tables[0].get("fields"), tables[0].get("data")
-    required = {"除權息日期", "代號", "權/息", *TPEX_EXDAILYQ_TERMS}
-    if not isinstance(fields, list) or not required.issubset(fields) or not isinstance(data, list):
-        raise SupplementError(f"exDailyQ fields are not the observed signature: {member}")
+    if not isinstance(data, list):
+        raise SupplementError(f"exDailyQ data must be a list: {member}")
     if not data:
-        # An empty response is not evidence about the schema or about events.
+        # An empty response is not evidence about the schema or about events: an
+        # empty exDailyQ can carry a different, older field list, so check nothing.
         logger.info("exDailyQ %s is empty; nothing to import", member)
         return
+    required = {"除權息日期", "代號", "權/息", *TPEX_EXDAILYQ_TERMS}
+    if not isinstance(fields, list) or not required.issubset(fields):
+        raise SupplementError(f"exDailyQ fields are not the observed signature: {member}")
     _document(
         rows,
         batch,

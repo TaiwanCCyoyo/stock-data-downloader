@@ -69,9 +69,12 @@ def _exdailyq(rows: list[list[str]] | None = None) -> bytes:
     return _dump({"stat": "ok", "tables": [{"fields": EXDAILYQ_FIELDS, "data": rows}]})
 
 
-def _twse_detail() -> bytes:
+def _twse_detail(*, reversed_fields: bool = False) -> bytes:
     row = ["1519  ", "華城", "6 元／股", "", "100 股", "0 股", "0 股", "0 元／股", "0 股", "0 股", "0 股", "0.00000000 股"]
-    return _dump({"stat": "ok", "fields": TWT49U_FIELDS, "data": [row]})
+    fields = TWT49U_FIELDS
+    if reversed_fields:
+        fields, row = fields[::-1], row[::-1]
+    return _dump({"stat": "ok", "fields": fields, "data": [row]})
 
 
 def _source(identifier: str, path: str, body: bytes, publisher: str = "TPEx") -> dict[str, Any]:
@@ -158,11 +161,11 @@ def _candidate(members: dict[str, bytes], *, cash: str = "2.91956063", extra_fac
     return _dump({"schema_version": "annual-winner-supplement-candidate.v1", "sources": sources, "events": events})
 
 
-def _write_batch(data_dir: Path, **candidate_options: Any) -> Path:
+def _write_batch(data_dir: Path, *, twse_reversed_fields: bool = False, **candidate_options: Any) -> Path:
     root = data_dir / "corporate_action_supplements" / BATCH
     detail = _mops_detail()
     exdailyq = _exdailyq()
-    twse = _twse_detail()
+    twse = _twse_detail(reversed_fields=twse_reversed_fields)
     members: dict[str, bytes] = {
         "captured/notice-6276.html": "<p>減資每仟股減少528.4689042股</p>".encode(),
         "captured/mops/response-001.json": _mops_list(),
@@ -366,7 +369,8 @@ def test_an_unmapped_explicit_fact_is_not_silently_dropped(tmp_path: Path) -> No
 
 def test_a_transcription_citing_an_empty_response_cannot_be_checked(tmp_path: Path) -> None:
     root = _write_batch(tmp_path)
-    empty = _dump({"stat": "ok", "tables": [{"fields": EXDAILYQ_FIELDS, "data": []}]})
+    # Empty exDailyQ replies can carry a different, older field list; it must not be read as a schema.
+    empty = _dump({"stat": "ok", "tables": [{"fields": EXDAILYQ_FIELDS[:5], "data": []}]})
     (root / "captured/tpex/exdailyq-3205.json").write_bytes(empty)
     manifest = json.loads((root / "captured/tpex/exdailyq-3205.manifest.json").read_bytes())
     manifest["sha256"] = hashlib.sha256(empty).hexdigest()
@@ -375,9 +379,19 @@ def test_a_transcription_citing_an_empty_response_cannot_be_checked(tmp_path: Pa
     _rewrite_identity(root, "captured/tpex/exdailyq-3205.json", empty, candidate_paths={"tpex/exdailyq-3205.json"})
     _rewrite_identity(root, "captured/tpex/exdailyq-3205.manifest.json", manifest_body)
 
-    # An empty response yields no rows, so the 3205 cash transcription citing it cannot be cross-checked.
+    # The empty response is skipped, not rejected; with no rows, the 3205 cash transcription citing it cannot be cross-checked.
     with pytest.raises(SupplementError, match="mixes parsed and unparsed"):
         extract(load_batch(tmp_path, BATCH))
+
+
+def test_twse_detail_fields_are_read_by_name_in_any_order(tmp_path: Path) -> None:
+    _write_batch(tmp_path, twse_reversed_fields=True)
+    db = _database(tmp_path)
+    _import(tmp_path, db)
+
+    twse = _terms(db, "1519")
+    assert twse[("twse_twt49u_detail", "cash_dividend_per_share")][:3] == ("6", "NTD_per_share", "stated")
+    assert twse[("twse_twt49u_detail", "free_shares_per_1000")][0] == "100"
 
 
 @pytest.mark.parametrize(
