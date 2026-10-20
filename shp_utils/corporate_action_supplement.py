@@ -403,7 +403,8 @@ def _twse_detail(batch: Batch, base: str, sources: dict[str, dict[str, Any]], ro
         fields, data = packet.get("fields"), packet.get("data")
         # Same acceptance as the capture tool: the field set, in any order, read by name.
         if (
-            packet.get("stat") != "ok"
+            not isinstance(packet.get("stat"), str)
+            or packet["stat"].lower() != "ok"
             or not isinstance(fields, list)
             or len(fields) != len(set(fields))
             or set(fields) != set(DETAIL_FIELDS["twt49u"])

@@ -69,12 +69,12 @@ def _exdailyq(rows: list[list[str]] | None = None) -> bytes:
     return _dump({"stat": "ok", "tables": [{"fields": EXDAILYQ_FIELDS, "data": rows}]})
 
 
-def _twse_detail(*, reversed_fields: bool = False) -> bytes:
+def _twse_detail(*, reversed_fields: bool = False, stat: str = "ok") -> bytes:
     row = ["1519  ", "華城", "6 元／股", "", "100 股", "0 股", "0 股", "0 元／股", "0 股", "0 股", "0 股", "0.00000000 股"]
     fields = TWT49U_FIELDS
     if reversed_fields:
         fields, row = fields[::-1], row[::-1]
-    return _dump({"stat": "ok", "fields": fields, "data": [row]})
+    return _dump({"stat": stat, "fields": fields, "data": [row]})
 
 
 def _source(identifier: str, path: str, body: bytes, publisher: str = "TPEx") -> dict[str, Any]:
@@ -161,11 +161,11 @@ def _candidate(members: dict[str, bytes], *, cash: str = "2.91956063", extra_fac
     return _dump({"schema_version": "annual-winner-supplement-candidate.v1", "sources": sources, "events": events})
 
 
-def _write_batch(data_dir: Path, *, twse_reversed_fields: bool = False, **candidate_options: Any) -> Path:
+def _write_batch(data_dir: Path, *, twse_reversed_fields: bool = False, twse_stat: str = "ok", **candidate_options: Any) -> Path:
     root = data_dir / "corporate_action_supplements" / BATCH
     detail = _mops_detail()
     exdailyq = _exdailyq()
-    twse = _twse_detail(reversed_fields=twse_reversed_fields)
+    twse = _twse_detail(reversed_fields=twse_reversed_fields, stat=twse_stat)
     members: dict[str, bytes] = {
         "captured/notice-6276.html": "<p>減資每仟股減少528.4689042股</p>".encode(),
         "captured/mops/response-001.json": _mops_list(),
@@ -392,6 +392,14 @@ def test_twse_detail_fields_are_read_by_name_in_any_order(tmp_path: Path) -> Non
     twse = _terms(db, "1519")
     assert twse[("twse_twt49u_detail", "cash_dividend_per_share")][:3] == ("6", "NTD_per_share", "stated")
     assert twse[("twse_twt49u_detail", "free_shares_per_1000")][0] == "100"
+
+
+def test_twse_detail_status_is_case_insensitive_like_the_capture_tool(tmp_path: Path) -> None:
+    _write_batch(tmp_path, twse_stat="OK")
+    db = _database(tmp_path)
+    _import(tmp_path, db)
+
+    assert _terms(db, "1519")[("twse_twt49u_detail", "cash_dividend_per_share")][0] == "6"
 
 
 @pytest.mark.parametrize(
