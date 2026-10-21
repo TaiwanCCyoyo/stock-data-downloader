@@ -222,6 +222,7 @@ def test_symbol_meta_failure_does_not_prevent_health_check_or_backup(monkeypatch
     monkeypatch.setattr(run_daily, "refresh_symbol_meta", failing_symbol_meta_refresh)
 
     assert run_daily.main() == 1
+    assert call_order.index("symbol_meta") < call_order.index("institutional_fetch")
     assert call_order.index("symbol_meta") < call_order.index("health_check")
     assert "backup" in call_order
 

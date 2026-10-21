@@ -20,13 +20,13 @@ The system MUST fetch the TWSE/TPEx ISIN public listing pages and index tradable
 #### Scenario: Persist raw source and fetch log
 
 - **WHEN** a fetch completes for a market
-- **THEN** the system MUST persist the raw HTML under `data/raw/isin/`
+- **THEN** the system MUST persist the raw HTML under `data/raw/isin/` as a new file named by market, fetch time and content hash, and MUST NOT overwrite an earlier raw file
 - **AND** it MUST record a fetch log entry with market, URL, row count, and a SHA-256 checksum of the raw content.
 
 ### Requirement: Scheduled refresh
 
 The daily update MUST keep `symbol_meta.sqlite` current without a manual command, so newly
-listed codes (for example new ETFs) are classified before the integrity check reads them.
+listed codes (for example new ETFs) are classified before the institutional fetch and the integrity check read them.
 
 #### Scenario: Refresh when the last fetch is a week old
 

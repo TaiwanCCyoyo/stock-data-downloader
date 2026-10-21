@@ -135,9 +135,8 @@ def run_fetch(args: argparse.Namespace) -> None:
                 retries=args.retries,
                 retry_sleep=args.retry_sleep,
             )
-            raw_path = args.raw_dir / f"{market}.html"
-            raw_path.write_text(html, encoding="utf-8")
             sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
+            write_raw_snapshot(args.raw_dir, market, html, sha256)
 
             rows = parse_isin_html(html)
             upsert_rows(conn, rows)
@@ -150,6 +149,25 @@ DEFAULT_MAX_AGE_DAYS = 7
 # A listing page that suddenly holds far fewer rows than the previous fetch is a
 # broken response, not a mass delisting; refuse it rather than record it.
 MIN_ROW_FRACTION_OF_PREVIOUS = 0.5
+
+
+def write_raw_snapshot(raw_dir: Path, market: str, html: str, sha256: str) -> Path:
+    """Keep each fetched listing page as its own file, never overwriting an earlier one.
+
+    The name carries the fetch time and content hash, so a later fetch (or a rerun in the
+    same second with different content) adds evidence instead of replacing it. The legacy
+    fixed-name ``<market>.html`` files from earlier fetches are left untouched.
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = raw_dir / f"{market}-{stamp}-{sha256[:12]}.html"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8", newline="") as handle:
+            handle.write(html)
+    except FileExistsError:
+        if hashlib.sha256(path.read_bytes()).hexdigest() != sha256:
+            raise
+    return path
 
 
 def refresh_symbol_meta(
@@ -197,9 +215,10 @@ def refresh_symbol_meta(
 
         raw_dir.mkdir(parents=True, exist_ok=True)
         for market, url, html, rows in fetched_pages:
-            (raw_dir / f"{market}.html").write_text(html, encoding="utf-8")
+            sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
+            write_raw_snapshot(raw_dir, market, html, sha256)
             upsert_rows(conn, rows)
-            upsert_fetch_log(conn, market=market, url=url, row_count=len(rows), sha256=hashlib.sha256(html.encode("utf-8")).hexdigest())
+            upsert_fetch_log(conn, market=market, url=url, row_count=len(rows), sha256=sha256)
             logger.info("refreshed %s symbol metadata: %d rows", market, len(rows))
         conn.commit()
     return True

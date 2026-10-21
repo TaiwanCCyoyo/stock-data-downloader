@@ -6,6 +6,7 @@ Run with: uv run python -m unittest test_fetch_symbol_meta -v
 from __future__ import annotations
 
 import sqlite3
+import time
 import unittest
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -167,8 +168,14 @@ class RefreshSymbolMetaTests(unittest.TestCase):
             self.assertTrue(self._refresh())
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(self._codes(), {"1101", "2330", "0050", "9999"})
-        self.assertTrue((self.raw_dir / "twse.html").is_file())
-        self.assertTrue(self._refresh(force=True))
+        self.assertEqual(len(list(self.raw_dir.glob("twse-*.html"))), 1)
+        legacy = self.raw_dir / "twse.html"
+        legacy.write_text("earlier evidence", encoding="utf-8")
+        time.sleep(1.1)  # the fetch log is keyed by market and whole-second fetch time
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML + "<!-- later -->", "url")):
+            self.assertTrue(self._refresh(force=True))
+        self.assertEqual(legacy.read_text(encoding="utf-8"), "earlier evidence")
+        self.assertEqual(len(list(self.raw_dir.glob("twse-*.html"))), 2)
 
     def test_first_run_without_a_database_fetches(self):
         with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML, "url")):

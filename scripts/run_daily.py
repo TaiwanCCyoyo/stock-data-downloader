@@ -129,7 +129,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     because mirroring a truncated file over a good backup copy is the one way
     an additive backup can still lose data. Steps 3, 5, 6, 7 and 8 are recorded but
     do not block: step 3 writes a separate corporate-action database inside a
-    an additive backup can still lose data. Steps 3, 5, 6, 7, 8, 8b and 9 are
+    an additive backup can still lose data. Steps 3, 5, 6, 6b, 7, 8 and 9 are
     recorded but do not block: step 3 writes a separate corporate-action
     database inside a transaction and never touches the price cache, steps
     5-8 write independent official-data artifacts, and step 9 only writes a
@@ -218,6 +218,17 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         logger.exception("月營收更新過程中發生錯誤")
         other_failures.append("步驟 6 月營收")
 
+    # Numbered 6b so the established step numbers in logs and docs keep their meaning.
+    # Before step 7, which reads symbol_meta to tell ETFs from stocks, so a newly listed
+    # code is not recorded as unknown; the health check reads it for categories too.
+    logger.info("\n--- 步驟 6b: 更新證券基本資料 (symbol_meta) ---")
+    try:
+        symbol_meta_refreshed = refresh_symbol_meta()
+        logger.info("symbol_meta_refreshed: %s", symbol_meta_refreshed)
+    except Exception:
+        logger.exception("證券基本資料更新過程中發生錯誤")
+        other_failures.append("步驟 6b 證券基本資料")
+
     logger.info("\n--- 步驟 7: 下載三大法人每日買賣 (TWSE/TPEx) ---")
     try:
         institutional_counts = run_institutional_fetch()
@@ -233,16 +244,6 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("官方產業價值鏈分類更新過程中發生錯誤")
         other_failures.append("步驟 8 產業價值鏈分類")
-
-    # Numbered 8b so the established step numbers in logs and docs keep their meaning.
-    # Before the health check, which reads symbol_meta for categories and listing dates.
-    logger.info("\n--- 步驟 8b: 更新證券基本資料 (symbol_meta) ---")
-    try:
-        symbol_meta_refreshed = refresh_symbol_meta()
-        logger.info("symbol_meta_refreshed: %s", symbol_meta_refreshed)
-    except Exception:
-        logger.exception("證券基本資料更新過程中發生錯誤")
-        other_failures.append("步驟 8b 證券基本資料")
 
     logger.info("\n--- 步驟 9: 檢查資料完整性 ---")
     try:
