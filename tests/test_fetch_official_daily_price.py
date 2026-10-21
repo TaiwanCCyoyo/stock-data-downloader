@@ -397,6 +397,28 @@ def test_run_fetch_supplements_lagging_twse_and_preserves_existing_row(tmp_path:
     assert new_row == (120.0, 21000)
 
 
+def test_run_fetch_does_not_warn_once_the_dated_supplement_covers_the_lagging_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    patch_lagging_bulk(monkeypatch)
+    monkeypatch.setattr(official, "fetch_twse_market_day", lambda *_args, **_kwargs: MI_INDEX_FIXTURE)
+
+    with caplog.at_level("WARNING"):
+        run_fetch(db_path=tmp_path / "official.sqlite")
+
+    assert not any("disagree on the trading day" in record.getMessage() for record in caplog.records)
+
+
+def test_run_fetch_still_warns_when_the_dated_supplement_returns_no_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    patch_lagging_bulk(monkeypatch)
+    monkeypatch.setattr(official, "fetch_twse_market_day", lambda *_args, **_kwargs: {"stat": "很抱歉，沒有符合條件的資料!"})
+
+    with caplog.at_level("WARNING"):
+        run_fetch(db_path=tmp_path / "official.sqlite")
+
+    assert any("disagree on the trading day" in record.getMessage() for record in caplog.records)
+
+
 @pytest.mark.parametrize("twse_date", ["1151002", "1151003"])
 def test_run_fetch_does_not_request_supplement_when_twse_is_current(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, twse_date: str):
     patch_lagging_bulk(monkeypatch)

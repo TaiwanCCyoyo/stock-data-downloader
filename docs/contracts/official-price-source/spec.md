@@ -56,7 +56,9 @@ key or credential.
 - **WHEN** the two bulk endpoints report different trading days in the same run
 - **THEN** the system MUST log a warning naming each market and the day it reported,
   because a lagging feed is otherwise indistinguishable from a healthy fetch and silently
-  leaves that trading day missing.
+  leaves that trading day missing
+- **AND** it MUST NOT log that warning when the dated TWSE supplement for the lagging day
+  returned rows, because the day is then covered; an empty or failed supplement keeps the warning.
 
 ### Requirement: Rate-limited resumable historical backfill
 
