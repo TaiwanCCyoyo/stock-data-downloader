@@ -6,6 +6,7 @@ Run with: uv run python -m unittest test_fetch_symbol_meta -v
 from __future__ import annotations
 
 import sqlite3
+import time
 import unittest
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 import fetch_symbol_meta
-from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, refresh_symbol_meta, upsert_rows
+from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, refresh_symbol_meta, upsert_rows, write_raw_snapshot
 
 FIXTURE_HTML = """
 <TABLE class='h4' align=center cellSpacing=3 cellPadding=2 width=750 border=0>
@@ -126,6 +127,15 @@ class LookupSymbolTests(unittest.TestCase):
         self.assertIsNone(classification)
 
 
+class WriteRawSnapshotTests(unittest.TestCase):
+    def test_identical_content_fetched_twice_keeps_two_files(self):
+        with TemporaryDirectory() as tmp:
+            first = write_raw_snapshot(Path(tmp), "twse", FIXTURE_HTML, "a" * 64)
+            second = write_raw_snapshot(Path(tmp), "twse", FIXTURE_HTML, "a" * 64)
+            self.assertNotEqual(first, second)
+            self.assertEqual(len(list(Path(tmp).glob("twse-*.html"))), 2)
+
+
 class RefreshSymbolMetaTests(unittest.TestCase):
     NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 
@@ -167,8 +177,14 @@ class RefreshSymbolMetaTests(unittest.TestCase):
             self.assertTrue(self._refresh())
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(self._codes(), {"1101", "2330", "0050", "9999"})
-        self.assertTrue((self.raw_dir / "twse.html").is_file())
-        self.assertTrue(self._refresh(force=True))
+        self.assertEqual(len(list(self.raw_dir.glob("twse-*.html"))), 1)
+        legacy = self.raw_dir / "twse.html"
+        legacy.write_text("earlier evidence", encoding="utf-8")
+        time.sleep(1.1)  # the fetch log is keyed by market and whole-second fetch time
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML + "<!-- later -->", "url")):
+            self.assertTrue(self._refresh(force=True))
+        self.assertEqual(legacy.read_text(encoding="utf-8"), "earlier evidence")
+        self.assertEqual(len(list(self.raw_dir.glob("twse-*.html"))), 2)
 
     def test_first_run_without_a_database_fetches(self):
         with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML, "url")):
