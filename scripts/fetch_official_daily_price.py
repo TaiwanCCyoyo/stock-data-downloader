@@ -99,7 +99,11 @@ def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep:
                 conn.commit()
                 counts["TWSE_supplement"] = inserted
                 logger.info("TWSE dated supplement requested=%s returned=%d inserted=%d", tpex_day, len(rows), inserted)
-                if not rows:
+                if rows:
+                    # The dated request covers the day the bulk feed lacked, so the
+                    # feeds no longer disagree; only an unresolved lag should warn.
+                    trade_dates[MARKET_TWSE] = tpex_day
+                else:
                     logger.warning("TWSE dated supplement for %s returned no rows; retaining bulk results", tpex_day)
             except Exception:
                 conn.rollback()

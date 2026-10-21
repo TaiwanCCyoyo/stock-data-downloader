@@ -34,6 +34,7 @@ def _patch_all_steps(monkeypatch: pytest.MonkeyPatch, call_order: list[str], *, 
         "refresh_value_chain_classification",
         lambda: record_step("value_chain", type("Result", (), {"refreshed": True})()),
     )
+    monkeypatch.setattr(run_daily, "refresh_symbol_meta", lambda: record_step("symbol_meta", False))
     monkeypatch.setattr(run_daily, "run_health_check", lambda *_a, **_kw: call_order.append("health_check"))
     monkeypatch.setattr(run_daily, "run_backup", lambda *_a, **_kw: record_step("backup", True))
 
@@ -74,6 +75,7 @@ def test_all_steps_run_in_one_invocation(monkeypatch: pytest.MonkeyPatch):
         "monthly_revenue",
         "institutional_fetch",
         "value_chain",
+        "symbol_meta",
         "health_check",
         "backup",
     }
@@ -112,6 +114,7 @@ def test_a_failing_step_does_not_prevent_the_others(monkeypatch: pytest.MonkeyPa
         "monthly_revenue",
         "institutional_fetch",
         "value_chain",
+        "symbol_meta",
         "health_check",
     }
 
@@ -134,6 +137,7 @@ def test_conversion_is_skipped_when_nothing_new_downloaded(monkeypatch: pytest.M
         "monthly_revenue",
         "institutional_fetch",
         "value_chain",
+        "symbol_meta",
         "health_check",
         "backup",
     }
@@ -207,6 +211,21 @@ def test_value_chain_failure_does_not_prevent_health_check_or_backup(monkeypatch
     assert "backup" in call_order
 
 
+def test_symbol_meta_failure_does_not_prevent_health_check_or_backup(monkeypatch: pytest.MonkeyPatch):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+
+    def failing_symbol_meta_refresh():
+        call_order.append("symbol_meta")
+        raise RuntimeError("isin page unavailable")
+
+    monkeypatch.setattr(run_daily, "refresh_symbol_meta", failing_symbol_meta_refresh)
+
+    assert run_daily.main() == 1
+    assert call_order.index("symbol_meta") < call_order.index("health_check")
+    assert "backup" in call_order
+
+
 def test_monthly_revenue_failure_does_not_prevent_later_steps_or_backup(monkeypatch: pytest.MonkeyPatch):
     call_order: list[str] = []
     _patch_all_steps(monkeypatch, call_order)
@@ -274,6 +293,7 @@ def test_an_aborted_download_fails_the_run_and_skips_the_backup(monkeypatch: pyt
         "monthly_revenue",
         "institutional_fetch",
         "value_chain",
+        "symbol_meta",
         "health_check",
     } <= set(call_order)
 

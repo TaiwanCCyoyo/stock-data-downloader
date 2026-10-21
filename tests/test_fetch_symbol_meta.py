@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
-from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, upsert_rows
+import fetch_symbol_meta
+from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, refresh_symbol_meta, upsert_rows
 
 FIXTURE_HTML = """
 <TABLE class='h4' align=center cellSpacing=3 cellPadding=2 width=750 border=0>
@@ -120,6 +124,72 @@ class LookupSymbolTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNone(classification)
+
+
+class RefreshSymbolMetaTests(unittest.TestCase):
+    NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.db_path = root / "symbol_meta.sqlite"
+        self.raw_dir = root / "raw"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _refresh(self, **kwargs):
+        return refresh_symbol_meta(db_path=self.db_path, raw_dir=self.raw_dir, now=self.NOW, retry_sleep=0, **kwargs)
+
+    def _seed_fetch_log(self, fetched_at: datetime, row_count: int) -> None:
+        init_db(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            for market in ("twse", "tpex"):
+                conn.execute(
+                    "INSERT INTO symbol_meta_fetch_log VALUES (?, ?, ?, ?, ?)",
+                    (market, "url", fetched_at.isoformat(timespec="seconds"), row_count, "sha"),
+                )
+
+    def _codes(self) -> set[str]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return {code for (code,) in conn.execute("SELECT code FROM symbol_meta")}
+
+    def test_fresh_fetch_log_skips_the_network(self):
+        self._seed_fetch_log(self.NOW - timedelta(days=2), row_count=3)
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", side_effect=AssertionError("network used")):
+            self.assertFalse(self._refresh())
+
+    def test_stale_fetch_log_upserts_every_market_and_keeps_existing_rows(self):
+        self._seed_fetch_log(self.NOW - timedelta(days=30), row_count=3)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            upsert_rows(conn, [{**parse_isin_html(FIXTURE_HTML)[0], "code": "9999", "name": "delisted"}])
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML, "url")) as fetch:
+            self.assertTrue(self._refresh())
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(self._codes(), {"1101", "2330", "0050", "9999"})
+        self.assertTrue((self.raw_dir / "twse.html").is_file())
+        self.assertTrue(self._refresh(force=True))
+
+    def test_first_run_without_a_database_fetches(self):
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML, "url")):
+            self.assertTrue(self._refresh())
+        self.assertEqual(self._codes(), {"1101", "2330", "0050"})
+
+    def test_implausibly_small_page_is_refused_and_nothing_is_written(self):
+        self._seed_fetch_log(self.NOW - timedelta(days=30), row_count=1000)
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", return_value=(FIXTURE_HTML, "url")):
+            with self.assertRaises(RuntimeError):
+                self._refresh()
+        self.assertEqual(self._codes(), set())
+        self.assertFalse(self.raw_dir.exists())
+
+    def test_one_broken_market_leaves_the_other_unwritten(self):
+        self._seed_fetch_log(self.NOW - timedelta(days=30), row_count=3)
+        pages = iter([(FIXTURE_HTML, "url"), ("<html></html>", "url")])
+        with mock.patch.object(fetch_symbol_meta, "fetch_isin_page", side_effect=lambda *a, **k: next(pages)):
+            with self.assertRaises(RuntimeError):
+                self._refresh()
+        self.assertEqual(self._codes(), set())
 
 
 if __name__ == "__main__":

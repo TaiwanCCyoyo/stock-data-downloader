@@ -23,6 +23,26 @@ The system MUST fetch the TWSE/TPEx ISIN public listing pages and index tradable
 - **THEN** the system MUST persist the raw HTML under `data/raw/isin/`
 - **AND** it MUST record a fetch log entry with market, URL, row count, and a SHA-256 checksum of the raw content.
 
+### Requirement: Scheduled refresh
+
+The daily update MUST keep `symbol_meta.sqlite` current without a manual command, so newly
+listed codes (for example new ETFs) are classified before the integrity check reads them.
+
+#### Scenario: Refresh when the last fetch is a week old
+
+- **WHEN** the daily update reaches the symbol-metadata step and any market's latest fetch-log
+  entry is older than seven days (or absent)
+- **THEN** it MUST fetch and upsert every market, and MUST NOT delete rows, so a delisted code
+  keeps its last known classification
+- **AND** when every market was fetched within seven days it MUST skip the network.
+
+#### Scenario: A broken listing page is refused
+
+- **WHEN** any market's page parses to no rows, or to fewer than half the rows of its previous
+  fetch
+- **THEN** the step MUST fail without writing rows, raw files or fetch-log entries for any
+  market, and the failure MUST NOT block the other daily steps or the backup.
+
 ### Requirement: Local classification lookup
 
 The system MUST support looking up a single symbol's classification and reporting aggregate local coverage, both without a live network fetch.

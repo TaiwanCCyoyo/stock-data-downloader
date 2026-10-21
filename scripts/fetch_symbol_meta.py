@@ -5,8 +5,9 @@ import hashlib
 import logging
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,65 @@ def run_fetch(args: argparse.Namespace) -> None:
             upsert_fetch_log(conn, market=market, url=url, row_count=len(rows), sha256=sha256)
             conn.commit()
             logger.info("fetched %s: %d rows", market, len(rows))
+
+
+DEFAULT_MAX_AGE_DAYS = 7
+# A listing page that suddenly holds far fewer rows than the previous fetch is a
+# broken response, not a mass delisting; refuse it rather than record it.
+MIN_ROW_FRACTION_OF_PREVIOUS = 0.5
+
+
+def refresh_symbol_meta(
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+    raw_dir: Path = DEFAULT_RAW_DIR,
+    now: datetime | None = None,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+    markets: tuple[str, ...] = tuple(MARKET_MODES),
+    retries: int = 3,
+    retry_sleep: float = 5.0,
+    timeout: float = 30.0,
+    force: bool = False,
+) -> bool:
+    """Refresh the ISIN listing when any market's last fetch is older than max_age_days.
+
+    Rows are only upserted, never deleted, so a delisted code keeps its last known
+    classification. Returns True when the network was used. Nothing is written for any
+    market unless every requested market parsed to a plausible number of rows, so one
+    broken page cannot leave the table half-refreshed.
+    """
+    now = now or datetime.now(UTC)
+    init_db(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        previous: dict[str, tuple[datetime | None, int]] = {}
+        for market in markets:
+            row = conn.execute(
+                "SELECT fetched_at, row_count FROM symbol_meta_fetch_log WHERE market_mode = ? ORDER BY fetched_at DESC LIMIT 1",
+                (market,),
+            ).fetchone()
+            previous[market] = (datetime.fromisoformat(row[0]) if row else None, row[1] if row else 0)
+        cutoff = now - timedelta(days=max_age_days)
+        if not force and all(fetched is not None and fetched >= cutoff for fetched, _ in previous.values()):
+            logger.info("symbol metadata is fresh; skipping network refresh")
+            return False
+
+        fetched_pages: list[tuple[str, str, str, list[dict[str, Any]]]] = []
+        for market in markets:
+            html, url = fetch_isin_page(market, timeout=timeout, retries=retries, retry_sleep=retry_sleep)
+            rows = parse_isin_html(html)
+            prior_count = previous[market][1]
+            if not rows or len(rows) < prior_count * MIN_ROW_FRACTION_OF_PREVIOUS:
+                raise RuntimeError(f"ISIN page for market={market} parsed to {len(rows)} rows (previous fetch: {prior_count}); not recorded")
+            fetched_pages.append((market, url, html, rows))
+
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        for market, url, html, rows in fetched_pages:
+            (raw_dir / f"{market}.html").write_text(html, encoding="utf-8")
+            upsert_rows(conn, rows)
+            upsert_fetch_log(conn, market=market, url=url, row_count=len(rows), sha256=hashlib.sha256(html.encode("utf-8")).hexdigest())
+            logger.info("refreshed %s symbol metadata: %d rows", market, len(rows))
+        conn.commit()
+    return True
 
 
 def run_status(args: argparse.Namespace) -> None:

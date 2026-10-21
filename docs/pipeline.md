@@ -13,7 +13,7 @@ uv run scripts/run_daily.py
 
 The order is download → minute-to-daily conversion → corporate actions for both
 markets → official daily prices → parquet rebuild → monthly revenue → institutional
-reports → value-chain classification → integrity check → backup. The official fetch
+reports → value-chain classification → symbol metadata (weekly) → integrity check → backup. The official fetch
 must precede the parquet rebuild; backup runs last. See the
 [orchestration contract](contracts/daily-update-orchestration/spec.md).
 
