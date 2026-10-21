@@ -154,19 +154,16 @@ MIN_ROW_FRACTION_OF_PREVIOUS = 0.5
 def write_raw_snapshot(raw_dir: Path, market: str, html: str, sha256: str) -> Path:
     """Keep each fetched listing page as its own file, never overwriting an earlier one.
 
-    The name carries the fetch time and content hash, so a later fetch (or a rerun in the
-    same second with different content) adds evidence instead of replacing it. The legacy
-    fixed-name ``<market>.html`` files from earlier fetches are left untouched.
+    The name carries the fetch time to the microsecond and the content hash, so every
+    fetch gets a distinct file even when two runs overlap and see identical content.
+    An existing file is an error rather than something to reuse. The legacy fixed-name
+    ``<market>.html`` files from earlier fetches are left untouched.
     """
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = raw_dir / f"{market}-{stamp}-{sha256[:12]}.html"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open("x", encoding="utf-8", newline="") as handle:
-            handle.write(html)
-    except FileExistsError:
-        if hashlib.sha256(path.read_bytes()).hexdigest() != sha256:
-            raise
+    with path.open("x", encoding="utf-8", newline="") as handle:
+        handle.write(html)
     return path
 
 

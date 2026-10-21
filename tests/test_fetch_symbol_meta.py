@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 import fetch_symbol_meta
-from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, refresh_symbol_meta, upsert_rows
+from fetch_symbol_meta import init_db, lookup_symbol, parse_isin_html, refresh_symbol_meta, upsert_rows, write_raw_snapshot
 
 FIXTURE_HTML = """
 <TABLE class='h4' align=center cellSpacing=3 cellPadding=2 width=750 border=0>
@@ -125,6 +125,15 @@ class LookupSymbolTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNone(classification)
+
+
+class WriteRawSnapshotTests(unittest.TestCase):
+    def test_identical_content_fetched_twice_keeps_two_files(self):
+        with TemporaryDirectory() as tmp:
+            first = write_raw_snapshot(Path(tmp), "twse", FIXTURE_HTML, "a" * 64)
+            second = write_raw_snapshot(Path(tmp), "twse", FIXTURE_HTML, "a" * 64)
+            self.assertNotEqual(first, second)
+            self.assertEqual(len(list(Path(tmp).glob("twse-*.html"))), 2)
 
 
 class RefreshSymbolMetaTests(unittest.TestCase):
