@@ -1,5 +1,6 @@
 """Exercise Windows launcher chains with an offline uv replacement."""
 
+import datetime
 import json
 import shutil
 import subprocess
@@ -51,7 +52,8 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
     assert Path(lines[0]) == repository
     assert lines[1] == expected_arguments
     # The wrapper trace brackets the run so a killed or stalled launch is visible in logs/.
-    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}.log").read_text(encoding="mbcs")
+    day = datetime.date.today().strftime("%Y%m%d")
+    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_text(encoding="mbcs")
     assert "wrapper start" in trace
     assert f"wrapper end exit_code={exit_code}" in trace
 

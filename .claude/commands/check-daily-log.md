@@ -69,7 +69,7 @@ establish a production failure. See [operations](../../docs/operations.md).
       Planning reads the multi-GB database before anything else is logged.
     - `startup: ... pid=... git_commit=...` as the first lines, to match the log
       to a process and a code version.
-    - `logs/wrapper_run_daily.log` and `logs/wrapper_backfill_official_history.log`
+    - `logs/wrapper_run_daily_<date>.log` and `logs/wrapper_backfill_official_history_<date>.log`
       hold a `wrapper start` / `wrapper end exit_code=N` pair per launch, with
       timestamps taken before `uv run` starts. A start without an end means the
       launch was killed or is still running; the time between the wrapper start
