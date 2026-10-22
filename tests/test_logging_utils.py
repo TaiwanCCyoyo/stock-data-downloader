@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from shp_utils.logging_utils import StepClock, dated_log_path, log_startup, setup_logging, start_heartbeat
+from shp_utils.logging_utils import LAUNCH_EPOCH_ENV, StepClock, dated_log_path, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
 
 
 @pytest.fixture(autouse=True)
@@ -94,3 +94,51 @@ def test_log_startup_records_pid_and_commit(caplog: pytest.LogCaptureFixture):
     text = "\n".join(record.getMessage() for record in caplog.records)
     assert f"pid={os.getpid()}" in text
     assert "git_commit=" in text
+
+
+def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: float | None) -> logging.LogRecord:
+    logger = logging.getLogger(logger_name)
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        stop = start_heartbeat(logger, interval_seconds=0.01, **kwargs)
+        deadline = time.monotonic() + 5
+        while not caplog.records and time.monotonic() < deadline:
+            time.sleep(0.01)
+        stop.set()
+    assert caplog.records
+    return caplog.records[0]
+
+
+def test_heartbeat_warns_from_launch_time_when_python_started_late(caplog: pytest.LogCaptureFixture):
+    # Python has run for milliseconds, but the launcher began 2h50m ago (a slow `uv run` start).
+    record = _first_heartbeat("late_start", caplog, warn_after_seconds=2.75 * 3600, launch_epoch=time.time() - 2.83 * 3600)
+
+    assert record.levelno == logging.WARNING
+    assert "since_launch=" in record.getMessage()
+
+
+def test_heartbeat_stays_info_just_before_the_launch_based_threshold(caplog: pytest.LogCaptureFixture):
+    record = _first_heartbeat("before_threshold", caplog, warn_after_seconds=2.75 * 3600, launch_epoch=time.time() - 2.7 * 3600)
+
+    assert record.levelno == logging.INFO
+    assert "since_launch=" in record.getMessage()
+
+
+def test_heartbeat_without_launch_time_counts_from_its_own_start(caplog: pytest.LogCaptureFixture):
+    record = _first_heartbeat("no_launch", caplog, warn_after_seconds=3600.0)
+
+    assert record.levelno == logging.INFO
+    assert "since_launch" not in record.getMessage()
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0", "-5", "99999999999"])
+def test_launch_epoch_from_env_ignores_missing_or_implausible_values(monkeypatch: pytest.MonkeyPatch, raw: str):
+    monkeypatch.setenv(LAUNCH_EPOCH_ENV, raw)
+
+    assert launch_epoch_from_env() is None
+
+
+def test_launch_epoch_from_env_reads_a_past_unix_time(monkeypatch: pytest.MonkeyPatch):
+    past = int(time.time()) - 60
+    monkeypatch.setenv(LAUNCH_EPOCH_ENV, str(past))
+
+    assert launch_epoch_from_env() == past

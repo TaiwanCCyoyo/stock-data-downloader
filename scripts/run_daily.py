@@ -60,12 +60,13 @@ from fetch_symbol_meta import refresh_symbol_meta
 from fetch_value_chain_classification import refresh_value_chain_classification
 
 from config import config
-from shp_utils.logging_utils import StepClock, log_startup, setup_logging, start_heartbeat
+from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
 
 logger = logging.getLogger(__name__)
 
 # Task Scheduler stops StockProject-DailyUpdate after 3 hours (setup_scheduled_tasks.ps1).
-# Heartbeats turn WARNING 15 minutes before that, so a run heading for a forced kill shows it.
+# Heartbeats turn WARNING 15 minutes before that, measured from the launcher's start when the
+# scheduled launcher provides it, so a run heading for a forced kill shows it.
 SCHEDULER_TIME_LIMIT_SEC = 3 * 3600
 HEARTBEAT_WARN_MARGIN_SEC = 15 * 60
 
@@ -153,7 +154,11 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
 
     logger.info("=== 日常更新作業開始 %s ===", datetime.datetime.now())
     log_startup(logger, "run_daily")
-    heartbeat_stop = start_heartbeat(logger, warn_after_seconds=SCHEDULER_TIME_LIMIT_SEC - HEARTBEAT_WARN_MARGIN_SEC)
+    heartbeat_stop = start_heartbeat(
+        logger,
+        warn_after_seconds=SCHEDULER_TIME_LIMIT_SEC - HEARTBEAT_WARN_MARGIN_SEC,
+        launch_epoch=launch_epoch_from_env(),
+    )
     step_clock = StepClock(logger)
     logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     logger.info("\n--- 步驟 1: 下載股票資料 ---")

@@ -58,7 +58,7 @@ establish a production failure. See [operations](../../docs/operations.md).
 
     - `heartbeat: pid=... elapsed=...s` every 10 minutes. A gap between
       heartbeats means the process was frozen or the machine was suspended; a
-      `WARNING` heartbeat means the daily run passed 2h45m and is heading for
+      `WARNING` heartbeat means the daily run passed 2h45m (counted from the launcher start, shown as `since_launch=...s`) and is heading for
       the 3h Task Scheduler limit, which kills it without any closing line.
     - `step_elapsed: 步驟 N = ...s` once per daily step, and `login_elapsed`,
       `mapping_elapsed` and `download_summary: contracts=... updated=...
