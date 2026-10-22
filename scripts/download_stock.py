@@ -288,7 +288,13 @@ def read_existing_mapping_count(path: str | Path) -> int:
         return 0
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return len(json5.load(f))
+            text = f.read()
+        try:
+            # The mapping is written with json.dump, so the stdlib parser reads it in
+            # milliseconds; json5 took ~7s on the 53k-entry file (2026-10-22).
+            return len(json.loads(text))
+        except ValueError:
+            return len(json5.loads(text))
     except Exception as e:
         logger.warning(f"無法讀取既有對照表 {path}，這次不做筆數比對: {e}")
         return 0
@@ -344,11 +350,13 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
 
     # Login
     logger.info("登入 Shioaji API...")
+    login_started = time.monotonic()
     api.login(
         api_key=os.environ["API_KEY"],
         secret_key=os.environ["SECRET_KEY"],
         contracts_timeout=CONTRACTS_FETCH_TIMEOUT_MS,
     )
+    logger.info("login_elapsed: %.1fs (contracts_timeout=%ds)", time.monotonic() - login_started, CONTRACTS_FETCH_TIMEOUT_MS // 1000)
     assert_contracts_fetched(api)
 
     try:
@@ -362,7 +370,9 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
             stock_category = {"TSE": {}, "OTC": {}}
 
         # Update symbol mapping
+        mapping_started = time.monotonic()
         update_stock_symbol_mapping(api)
+        logger.info("mapping_elapsed: %.1fs", time.monotonic() - mapping_started)
 
         # Build download list
         contract_list = get_contract_list(api, stock_category)
@@ -380,6 +390,8 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
         request_end_str = end if start is not None and end is not None else today_str
         downloadable = True
         consecutive_failures = 0
+        skipped_failed_count = 0
+        request_error_count = 0
         pacer = RequestPacer()
         last_usage_check = 0.0
 
@@ -451,6 +463,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
                         chunk_dfs.append(chunk_df)
                 except Exception as e:
                     chunk_raised = True
+                    request_error_count += 1
                     logger.error(f"取得失敗 ({chunk_start} ~ {chunk_end}): {e}")
             df_new = pd.concat(chunk_dfs, ignore_index=True) if chunk_dfs else pd.DataFrame()
 
@@ -489,6 +502,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
                 consecutive_failures = 0
 
             if not success:
+                skipped_failed_count += 1
                 logger.warning(f"跳過{contract.name} ({contract.code}) 因為從 {start_date_str} 到 {request_end_str} 的資料取得失敗")
                 continue
 
@@ -558,6 +572,14 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
 
         end_time = datetime.datetime.now()
         logger.info(f"結束: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(
+            "download_summary: contracts=%d updated=%d skipped_failed=%d request_errors=%d elapsed=%.0fs",
+            len(contract_list),
+            updated_symbol_count,
+            skipped_failed_count,
+            request_error_count,
+            (end_time - start_time).total_seconds(),
+        )
         logger.info(f"程式共花費: {(end_time - start_time).total_seconds()} 秒")
 
     except DownloadAborted:

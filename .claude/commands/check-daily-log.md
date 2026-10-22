@@ -53,6 +53,34 @@ establish a production failure. See [operations](../../docs/operations.md).
     equivalent (weaker) signal is `共取得 N 檔標的` in step 1, which should be
     ~1,970 on a trading day.
 
+4b. Check that the run was alive the whole time, not just that it finished.
+    Runs from 2026-10-23 carry these lines, each a single grep:
+
+    - `heartbeat: pid=... elapsed=...s` every 10 minutes. A gap between
+      heartbeats means the process was frozen or the machine was suspended; a
+      `WARNING` heartbeat means the daily run passed 2h45m and is heading for
+      the 3h Task Scheduler limit, which kills it without any closing line.
+    - `step_elapsed: 步驟 N = ...s` once per daily step, and `login_elapsed`,
+      `mapping_elapsed` and `download_summary: contracts=... updated=...
+      skipped_failed=... request_errors=...` in step 1. `skipped_failed` in the
+      hundreds with `request_errors` to match is a network problem, not quiet
+      symbols.
+    - Backfill: `auto plan: ... resolved in ...s` for each planning query.
+      Planning reads the multi-GB database before anything else is logged.
+    - `startup: ... pid=... git_commit=...` as the first lines, to match the log
+      to a process and a code version.
+    - `logs/wrapper_run_daily.log` and `logs/wrapper_backfill_official_history.log`
+      hold a `wrapper start` / `wrapper end exit_code=N` pair per launch, with
+      timestamps taken before `uv run` starts. A start without an end means the
+      launch was killed or is still running; the time between the wrapper start
+      and the first Python log line is `uv run` sync plus import time.
+      `*.err.log` beside them holds uv's stderr, including import-time
+      tracebacks that happen before logging is configured.
+
+    Also scan each log for gaps of more than five minutes between consecutive
+    lines outside step 1's download loop: on 2026-10-22 the daily run was
+    silent for about two hours twice and the log alone could not say why.
+
 5. Read `data/data_quality_report.json` if present. It is schema v3 as of
    2026-09-02 and its subject is `price_daily.parquet`, the artifact research
    reads -- not the Shioaji day CSVs it audited before. Summarize:

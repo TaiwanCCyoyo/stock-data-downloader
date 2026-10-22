@@ -50,6 +50,10 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
     lines = (repository / "invocation.txt").read_text(encoding="mbcs").splitlines()
     assert Path(lines[0]) == repository
     assert lines[1] == expected_arguments
+    # The wrapper trace brackets the run so a killed or stalled launch is visible in logs/.
+    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}.log").read_text(encoding="mbcs")
+    assert "wrapper start" in trace
+    assert f"wrapper end exit_code={exit_code}" in trace
 
 
 @pytest.mark.parametrize("missing_task", [False, True])
