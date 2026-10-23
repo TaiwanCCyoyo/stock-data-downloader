@@ -1,9 +1,11 @@
 """Exercise Windows launcher chains with an offline uv replacement."""
 
+import datetime
 import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -31,7 +33,7 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
     # fall through to the real downloader installed on the machine's PATH.
     for directory in (repository, cron, unrelated):
         (directory / "uv.cmd").write_text(
-            f"@echo off\n> invocation.txt echo %CD%\n>> invocation.txt echo %*\nexit /b {exit_code}\n",
+            f"@echo off\n> invocation.txt echo %CD%\n>> invocation.txt echo %*\n>> invocation.txt echo %STOCK_PROJECT_LAUNCH_EPOCH%\nexit /b {exit_code}\n",
             encoding="ascii",
         )
     for extension in ("cmd", "vbs"):
@@ -50,6 +52,13 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
     lines = (repository / "invocation.txt").read_text(encoding="mbcs").splitlines()
     assert Path(lines[0]) == repository
     assert lines[1] == expected_arguments
+    # Python's heartbeat measures the scheduler limit from this launch time, not from its own start.
+    assert abs(int(lines[2]) - time.time()) < 120
+    # The wrapper trace brackets the run so a killed or stalled launch is visible in logs/.
+    day = datetime.date.today().strftime("%Y%m%d")
+    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_text(encoding="mbcs")
+    assert "wrapper start" in trace
+    assert f"wrapper end exit_code={exit_code}" in trace
 
 
 @pytest.mark.parametrize("missing_task", [False, True])

@@ -464,3 +464,14 @@ def test_the_market_index_can_be_requested_by_code(isolated_download_env: Path, 
     assert download_stock.get_contract_by_code(cast(download_stock.sj.Shioaji, fake_api), "001") is not None, "the market index must be resolvable by code"
     assert download_stock.get_contract_by_code(cast(download_stock.sj.Shioaji, fake_api), "2330") is not None, "ordinary stocks must still resolve"
     assert download_stock.get_contract_by_code(cast(download_stock.sj.Shioaji, fake_api), "9999") is None, "an unknown code must still resolve to None"
+
+
+def test_read_existing_mapping_count_reads_json_and_json5(tmp_path: Path):
+    strict = tmp_path / "strict.json5"
+    strict.write_text('{"2330": "台積電", "2317": "鴻海"}', encoding="utf-8")
+    relaxed = tmp_path / "relaxed.json5"
+    relaxed.write_text('{"2330": "台積電", // comment\n "2317": "鴻海",}', encoding="utf-8")
+
+    assert download_stock.read_existing_mapping_count(strict) == 2
+    assert download_stock.read_existing_mapping_count(relaxed) == 2
+    assert download_stock.read_existing_mapping_count(tmp_path / "missing.json5") == 0

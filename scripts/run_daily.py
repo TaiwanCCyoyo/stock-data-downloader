@@ -60,9 +60,16 @@ from fetch_symbol_meta import refresh_symbol_meta
 from fetch_value_chain_classification import refresh_value_chain_classification
 
 from config import config
-from shp_utils.logging_utils import setup_logging
+from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
 
 logger = logging.getLogger(__name__)
+
+# Task Scheduler stops StockProject-DailyUpdate after 3 hours (setup_scheduled_tasks.ps1).
+# Heartbeats turn WARNING 30 minutes before that, measured from the launcher's start when the
+# scheduled launcher provides it. With a 10-minute heartbeat the first WARNING lands 20-30 minutes
+# ahead of the kill, so a run heading for it shows it.
+SCHEDULER_TIME_LIMIT_SEC = 3 * 3600
+HEARTBEAT_WARN_MARGIN_SEC = 30 * 60
 
 
 def _corporate_action_fetch_args(source: str, year: int, *, force: bool) -> argparse.Namespace:
@@ -147,8 +154,16 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     other_failures: list[str] = []
 
     logger.info("=== 日常更新作業開始 %s ===", datetime.datetime.now())
+    log_startup(logger, "run_daily")
+    heartbeat_stop = start_heartbeat(
+        logger,
+        warn_after_seconds=SCHEDULER_TIME_LIMIT_SEC - HEARTBEAT_WARN_MARGIN_SEC,
+        launch_epoch=launch_epoch_from_env(),
+    )
+    step_clock = StepClock(logger)
     logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     logger.info("\n--- 步驟 1: 下載股票資料 ---")
+    step_clock.begin("步驟 1")
     updated_symbol_count = 0
     try:
         updated_symbol_count = download_stock.main(codes=codes)
@@ -163,6 +178,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         cache_failures.append("步驟 1 下載")
 
     logger.info("\n--- 步驟 2: 轉換資料 (分K -> 日K) ---")
+    step_clock.begin("步驟 2")
     if updated_symbol_count:
         logger.info("步驟 1 更新了 %s 檔標的，開始分K轉日K轉換", updated_symbol_count)
         try:
@@ -178,6 +194,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         logger.warning("步驟 1 沒有下載到任何新資料，略過分K轉日K轉換；若今天是交易日請檢查步驟 1 的合約清單筆數")
 
     logger.info("\n--- 步驟 3: 更新除權息資料 ---")
+    step_clock.begin("步驟 3")
     try:
         _refresh_corporate_actions()
     except Exception:
@@ -190,6 +207,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         other_failures.append("步驟 3 除權息")
 
     logger.info("\n--- 步驟 4: 下載官方每日股價 (TWSE/TPEx) ---")
+    step_clock.begin("步驟 4")
     try:
         official_counts = run_official_daily_fetch()
         logger.info("official_daily_fetch_counts: %s", official_counts)
@@ -204,6 +222,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     # definition change on the newest bar, every day, exactly where a volume-surge
     # rule looks.
     logger.info("\n--- 步驟 5: 重建 price_daily.parquet 快取 ---")
+    step_clock.begin("步驟 5")
     try:
         build_price_parquet(Path(DEFAULT_DATA_PATH))
     except Exception:
@@ -211,6 +230,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         cache_failures.append("步驟 5 parquet")
 
     logger.info("\n--- 步驟 6: 更新上市與上櫃月營收 ---")
+    step_clock.begin("步驟 6")
     try:
         monthly_revenue_counts = refresh_monthly_revenue()
         logger.info("monthly_revenue_refresh_counts: %s", monthly_revenue_counts)
@@ -222,6 +242,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     # Before step 7, which reads symbol_meta to tell ETFs from stocks, so a newly listed
     # code is not recorded as unknown; the health check reads it for categories too.
     logger.info("\n--- 步驟 6b: 更新證券基本資料 (symbol_meta) ---")
+    step_clock.begin("步驟 6b")
     try:
         symbol_meta_refreshed = refresh_symbol_meta()
         logger.info("symbol_meta_refreshed: %s", symbol_meta_refreshed)
@@ -230,6 +251,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         other_failures.append("步驟 6b 證券基本資料")
 
     logger.info("\n--- 步驟 7: 下載三大法人每日買賣 (TWSE/TPEx) ---")
+    step_clock.begin("步驟 7")
     try:
         institutional_counts = run_institutional_fetch()
         logger.info("institutional_daily_fetch_counts: %s", institutional_counts)
@@ -238,6 +260,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         other_failures.append("步驟 7 三大法人")
 
     logger.info("\n--- 步驟 8: 更新官方產業價值鏈分類 ---")
+    step_clock.begin("步驟 8")
     try:
         classification_result = refresh_value_chain_classification()
         logger.info("value_chain_classification_refreshed: %s", classification_result.refreshed)
@@ -246,6 +269,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         other_failures.append("步驟 8 產業價值鏈分類")
 
     logger.info("\n--- 步驟 9: 檢查資料完整性 ---")
+    step_clock.begin("步驟 9")
     try:
         run_health_check(DEFAULT_DATA_PATH)
     except Exception:
@@ -253,6 +277,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         other_failures.append("步驟 9 完整性檢查")
 
     logger.info("\n--- 步驟 10: 備份資料快取 ---")
+    step_clock.begin("步驟 10")
     if cache_failures:
         logger.warning("前置步驟失敗，略過備份以免把不完整的檔案覆蓋到備份上：%s", cache_failures)
     else:
@@ -262,6 +287,8 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
             logger.exception("備份過程中發生錯誤")
             other_failures.append("步驟 10 備份")
 
+    step_clock.finish()
+    heartbeat_stop.set()
     logger.info("\n=== 作業結束 %s ===", datetime.datetime.now())
 
     failures = cache_failures + other_failures

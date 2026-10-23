@@ -43,7 +43,7 @@ from typing import Any
 from fetch_official_daily_price import DEFAULT_DB_PATH, MARKET_TPEX, MARKET_TWSE, connect, init_db, insert_rows, upsert_rows
 
 from config import config
-from shp_utils.logging_utils import setup_logging
+from shp_utils.logging_utils import log_startup, setup_logging, start_heartbeat
 from shp_utils.official_api import fetch_json_with_retry, parse_int, parse_number
 from shp_utils.twse_market_day import TWSE_EARLIEST_DATE, fetch_twse_market_day, normalize_twse_market_day_payload
 
@@ -289,6 +289,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
+    log_startup(logger, "backfill_official_history")
+    heartbeat_stop = start_heartbeat(logger)
     if args.max_consecutive_failures is not None and args.max_consecutive_failures <= 0:
         parser.error("--max-consecutive-failures must be a positive integer")
 
@@ -298,9 +300,18 @@ def main() -> None:
 
     auto_mode = not any(explicit_args_given) and args.twse_dates is None and args.tpex_dates is None
     if auto_mode:
+        # Planning reads a multi-GB database and logs nothing until it is done, so each
+        # query is timed: a slow or blocked read shows up here instead of as a silent gap.
+        plan_started = time.monotonic()
+        logger.info("auto plan: resolving crawl plan from %s", args.db_path)
         codes, start_year_month, end_year_month = resolve_auto_crawl_plan(args.db_path)
+        logger.info("auto plan: crawl universe resolved in %.1fs", time.monotonic() - plan_started)
+        query_started = time.monotonic()
         tpex_dates = args.tpex_dates if args.tpex_dates is not None else load_tpex_dates_to_fetch(args.db_path)
+        logger.info("auto plan: TPEx dates resolved in %.1fs", time.monotonic() - query_started)
+        query_started = time.monotonic()
         twse_dates = load_twse_dates_to_fetch(args.db_path)
+        logger.info("auto plan: TWSE dates resolved in %.1fs", time.monotonic() - query_started)
         logger.info("auto plan: %d TWSE codes, %d TWSE day(s), %d TPEx day(s)", len(codes), len(twse_dates), len(tpex_dates))
         newest_first = True
         max_seconds = resolve_auto_budget(args.max_requests, args.max_seconds)
@@ -330,6 +341,7 @@ def main() -> None:
         twse_dates=twse_dates,
         auto_tpex_dates=auto_mode and args.tpex_dates is None,
     )
+    heartbeat_stop.set()
     logger.info("backfill_stats: %s", stats)
 
 

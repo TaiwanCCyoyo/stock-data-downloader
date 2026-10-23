@@ -1,5 +1,10 @@
 import datetime
 import logging
+import os
+import platform
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 from rich.logging import RichHandler
@@ -64,3 +69,115 @@ def get_logger(log_file: str | Path, name: str | None = None) -> logging.Logger:
 def get_named_logger(name: str) -> logging.Logger:
     setup_logging(f"{name}.log")
     return logging.getLogger(name)
+
+
+HEARTBEAT_INTERVAL_SEC = 600.0
+
+# Set by the scheduled launchers (cron/*_scheduled.cmd) to the Unix time the launcher began.
+# The scheduler's execution time limit counts from then, not from when Python started, so a
+# slow `uv run` start would otherwise hide most of the elapsed time from the heartbeat.
+LAUNCH_EPOCH_ENV = "STOCK_PROJECT_LAUNCH_EPOCH"
+
+
+def log_startup(logger: logging.Logger, label: str) -> None:
+    """Record who is running, as the first lines a run writes.
+
+    The log only starts after imports finish, so a run that stalls before this
+    point leaves no trace. The pid and commit let the log be matched to a
+    process in Task Scheduler / Task Manager and to the code that produced it.
+    """
+    logger.info("startup: %s pid=%d python=%s platform=%s", label, os.getpid(), platform.python_version(), platform.platform())
+    logger.info("startup: git_commit=%s cwd=%s", _git_commit(), Path.cwd())
+
+
+def _git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).resolve().parent,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def launch_epoch_from_env() -> float | None:
+    """Unix time the scheduled launcher began, or None when run by hand or malformed."""
+    raw = os.environ.get(LAUNCH_EPOCH_ENV, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if 0 < value <= time.time() else None
+
+
+def start_heartbeat(
+    logger: logging.Logger,
+    *,
+    interval_seconds: float = HEARTBEAT_INTERVAL_SEC,
+    warn_after_seconds: float | None = None,
+    launch_epoch: float | None = None,
+) -> threading.Event:
+    """Log a heartbeat line at once, then every ``interval_seconds``, until the returned event is set.
+
+    A run can be silent for a long time without being broken (a slow query, a
+    long download), and from the log alone that looks identical to a stalled
+    process. The heartbeat separates the two: lines keep coming while the
+    process is alive and scheduled, and stop when it is frozen or killed.
+
+    ``warn_after_seconds`` raises each heartbeat to WARNING once the run is
+    older than that. The age is measured from ``launch_epoch`` (the launcher's
+    start, see ``LAUNCH_EPOCH_ENV``) when known, because the scheduler's limit
+    counts from the launch; otherwise from this call, which undercounts any
+    time spent before Python started. The line reports ``since_launch`` only in
+    the first case, so the log says which clock the warning used.
+    """
+    stop = threading.Event()
+    started = time.monotonic()
+
+    def emit() -> None:
+        elapsed = time.monotonic() - started
+        since_launch = time.time() - launch_epoch if launch_epoch is not None else None
+        age = since_launch if since_launch is not None else elapsed
+        level = logging.WARNING if warn_after_seconds is not None and age >= warn_after_seconds else logging.INFO
+        if since_launch is None:
+            logger.log(level, "heartbeat: pid=%d elapsed=%.0fs", os.getpid(), elapsed)
+        else:
+            logger.log(level, "heartbeat: pid=%d elapsed=%.0fs since_launch=%.0fs", os.getpid(), elapsed, since_launch)
+
+    def beat() -> None:
+        # The first line is written at once, not after one interval: a run that starts already past
+        # the threshold (a long launcher delay) must warn immediately, not ten minutes later.
+        emit()
+        while not stop.wait(interval_seconds):
+            emit()
+
+    threading.Thread(target=beat, name="heartbeat", daemon=True).start()
+    return stop
+
+
+class StepClock:
+    """Logs how long each named pipeline step took, one line per step.
+
+    ``begin`` closes the previous step and opens the next, so a step's duration
+    is recorded no matter which branch (success, handled failure, skip) ended
+    it. The line is additive: the existing step headers keep their wording.
+    """
+
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+        self._name: str | None = None
+        self._started = 0.0
+
+    def begin(self, name: str) -> None:
+        self.finish()
+        self._name = name
+        self._started = time.monotonic()
+
+    def finish(self) -> None:
+        if self._name is not None:
+            self._logger.info("step_elapsed: %s = %.1fs", self._name, time.monotonic() - self._started)
+            self._name = None
