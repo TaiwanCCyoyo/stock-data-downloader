@@ -99,7 +99,7 @@ def test_log_startup_records_pid_and_commit(caplog: pytest.LogCaptureFixture):
 def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: float | None) -> logging.LogRecord:
     logger = logging.getLogger(logger_name)
     with caplog.at_level(logging.INFO, logger=logger_name):
-        stop = start_heartbeat(logger, interval_seconds=0.01, **kwargs)
+        stop = start_heartbeat(logger, **{"interval_seconds": 0.01, **kwargs})
         deadline = time.monotonic() + 5
         while not caplog.records and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -142,3 +142,10 @@ def test_launch_epoch_from_env_reads_a_past_unix_time(monkeypatch: pytest.Monkey
     monkeypatch.setenv(LAUNCH_EPOCH_ENV, str(past))
 
     assert launch_epoch_from_env() == past
+
+
+def test_heartbeat_warns_immediately_when_already_past_the_threshold_at_start(caplog: pytest.LogCaptureFixture):
+    # The interval is an hour: the first line must not wait for it.
+    record = _first_heartbeat("past_at_start", caplog, warn_after_seconds=2.5 * 3600, launch_epoch=time.time() - 2.9 * 3600, interval_seconds=3600.0)
+
+    assert record.levelno == logging.WARNING

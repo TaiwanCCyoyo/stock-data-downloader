@@ -121,7 +121,7 @@ def start_heartbeat(
     warn_after_seconds: float | None = None,
     launch_epoch: float | None = None,
 ) -> threading.Event:
-    """Log a heartbeat line every ``interval_seconds`` until the returned event is set.
+    """Log a heartbeat line at once, then every ``interval_seconds``, until the returned event is set.
 
     A run can be silent for a long time without being broken (a slow query, a
     long download), and from the log alone that looks identical to a stalled
@@ -138,16 +138,22 @@ def start_heartbeat(
     stop = threading.Event()
     started = time.monotonic()
 
+    def emit() -> None:
+        elapsed = time.monotonic() - started
+        since_launch = time.time() - launch_epoch if launch_epoch is not None else None
+        age = since_launch if since_launch is not None else elapsed
+        level = logging.WARNING if warn_after_seconds is not None and age >= warn_after_seconds else logging.INFO
+        if since_launch is None:
+            logger.log(level, "heartbeat: pid=%d elapsed=%.0fs", os.getpid(), elapsed)
+        else:
+            logger.log(level, "heartbeat: pid=%d elapsed=%.0fs since_launch=%.0fs", os.getpid(), elapsed, since_launch)
+
     def beat() -> None:
+        # The first line is written at once, not after one interval: a run that starts already past
+        # the threshold (a long launcher delay) must warn immediately, not ten minutes later.
+        emit()
         while not stop.wait(interval_seconds):
-            elapsed = time.monotonic() - started
-            since_launch = time.time() - launch_epoch if launch_epoch is not None else None
-            age = since_launch if since_launch is not None else elapsed
-            level = logging.WARNING if warn_after_seconds is not None and age >= warn_after_seconds else logging.INFO
-            if since_launch is None:
-                logger.log(level, "heartbeat: pid=%d elapsed=%.0fs", os.getpid(), elapsed)
-            else:
-                logger.log(level, "heartbeat: pid=%d elapsed=%.0fs since_launch=%.0fs", os.getpid(), elapsed, since_launch)
+            emit()
 
     threading.Thread(target=beat, name="heartbeat", daemon=True).start()
     return stop
