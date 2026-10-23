@@ -65,10 +65,11 @@ from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startu
 logger = logging.getLogger(__name__)
 
 # Task Scheduler stops StockProject-DailyUpdate after 3 hours (setup_scheduled_tasks.ps1).
-# Heartbeats turn WARNING 15 minutes before that, measured from the launcher's start when the
-# scheduled launcher provides it, so a run heading for a forced kill shows it.
+# Heartbeats turn WARNING 30 minutes before that, measured from the launcher's start when the
+# scheduled launcher provides it. With a 10-minute heartbeat the first WARNING lands 20-30 minutes
+# ahead of the kill, so a run heading for it shows it.
 SCHEDULER_TIME_LIMIT_SEC = 3 * 3600
-HEARTBEAT_WARN_MARGIN_SEC = 15 * 60
+HEARTBEAT_WARN_MARGIN_SEC = 30 * 60
 
 
 def _corporate_action_fetch_args(source: str, year: int, *, force: bool) -> argparse.Namespace:

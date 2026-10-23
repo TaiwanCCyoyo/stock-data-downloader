@@ -6,7 +6,7 @@ cd /d "%~dp0.."
 if errorlevel 1 exit /b 1
 REM Wrapper trace: the Python log only starts after `uv run` has synced and imported, so
 REM a stall before that (2026-10-22: a ~2h silent start) leaves no other record. These
-REM lines go to logs\wrapper_run_daily_<YYYYMMDD>.log; uv's own stderr (sync progress,
+REM lines go to logs\wrapper_run_daily_<YYYYMMDD>.log; the launched process's stderr (uv sync progress,
 REM import-time tracebacks) goes to logs\wrapper_run_daily_<YYYYMMDD>.err.log. A start line with no matching
 REM end line means the process was killed (e.g. by the Task Scheduler time limit).
 if not exist logs mkdir logs
