@@ -30,6 +30,7 @@ and decisions; their implementation status is unverified, and they are not curre
 | Institutional flows                       | [institutional-data-pipeline](contracts/institutional-data-pipeline/spec.md) |
 | Value-chain observations                  | [value-chain-classification](contracts/value-chain-classification/spec.md)   |
 | Integrity report                          | [data-quality-report](contracts/data-quality-report/spec.md)                 |
+| Local artifact status                     | [data-status](contracts/data-status.md)                                      |
 | Additive backup                           | [data-backup](contracts/data-backup/spec.md)                                 |
 
 ## Evidence and source guides

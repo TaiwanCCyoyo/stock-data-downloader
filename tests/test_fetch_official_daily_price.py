@@ -274,6 +274,7 @@ def test_run_fetch_persists_rows_from_both_markets(tmp_path: Path, monkeypatch: 
     counts = run_fetch(db_path=db_path)
 
     assert counts == {"TWSE": 2, "TPEx": 3, "TWSE_supplement": 0}
+    assert counts.failed_markets == set()
     with sqlite3.connect(db_path) as conn:
         markets = {row[0] for row in conn.execute("SELECT DISTINCT market FROM official_daily_price")}
     assert markets == {"TWSE", "TPEx"}
@@ -292,6 +293,7 @@ def test_run_fetch_isolates_one_market_failure_from_the_other(tmp_path: Path, mo
 
     assert counts["TWSE"] == 0
     assert counts["TPEx"] == 3
+    assert counts.failed_markets == {"TWSE"}
     with sqlite3.connect(db_path) as conn:
         tpex_count = conn.execute("SELECT COUNT(*) FROM official_daily_price WHERE market = 'TPEx'").fetchone()[0]
     assert tpex_count == 3
@@ -458,6 +460,7 @@ def test_run_fetch_supplement_failure_retains_committed_bulk(
     db_path = tmp_path / "official.sqlite"
     counts = run_fetch(db_path=db_path)
     assert counts == {"TWSE": 0 if missing_twse else 2, "TPEx": 3, "TWSE_supplement": 0}
+    assert counts.failed_markets == (set() if failure == "empty" else {"TWSE"})
     assert any("retaining bulk results" in record.getMessage() and record.levelname == "WARNING" for record in caplog.records)
     with connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM official_daily_price").fetchone()[0] == (3 if missing_twse else 5)

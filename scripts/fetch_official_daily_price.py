@@ -18,7 +18,7 @@ from typing import Any
 
 from config import config
 from shp_utils.logging_utils import setup_logging
-from shp_utils.official_api import fetch_json_with_retry, parse_int, parse_number, parse_roc_compact_date
+from shp_utils.official_api import MarketFetchCounts, fetch_json_with_retry, parse_int, parse_number, parse_roc_compact_date
 from shp_utils.twse_market_day import fetch_twse_market_day, normalize_twse_market_day_payload
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def main() -> None:
     logger.info("official_daily_fetch_counts: %s", counts)
 
 
-def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep: float = 5.0) -> dict[str, int]:
+def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep: float = 5.0) -> MarketFetchCounts:
     """Fetch both markets' latest-day bulk data and upsert into `db_path`.
 
     Each market is isolated: a failure fetching or normalizing one market is
@@ -61,7 +61,7 @@ def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep:
     and persisted, and never corrupts a previously stored day.
     """
     init_db(db_path)
-    counts: dict[str, int] = {}
+    counts = MarketFetchCounts()
     trade_dates: dict[str, str] = {}
     with connect(db_path) as conn:
         for market, fetch_fn, normalize_fn in (
@@ -87,6 +87,7 @@ def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep:
                 conn.rollback()
                 logger.exception("failed to fetch %s official daily bulk", market)
                 counts[market] = 0
+                counts.failed_markets.add(market)
         twse_day = trade_dates.get(MARKET_TWSE)
         tpex_day = trade_dates.get(MARKET_TPEX)
         if tpex_day and (not twse_day or twse_day < tpex_day):
@@ -107,6 +108,7 @@ def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep:
                     logger.warning("TWSE dated supplement for %s returned no rows; retaining bulk results", tpex_day)
             except Exception:
                 conn.rollback()
+                counts.failed_markets.add(MARKET_TWSE)
                 logger.warning("TWSE dated supplement for %s failed; retaining bulk results", tpex_day, exc_info=True)
     warn_if_markets_disagree(trade_dates)
     return counts

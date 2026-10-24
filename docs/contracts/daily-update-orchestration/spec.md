@@ -89,6 +89,12 @@ The system MUST be suitable for unattended scheduled execution (e.g. Windows Tas
 
 ### Requirement: The daily run reports failure
 
+The runner publishes `data-status.json` after the health check and before backup,
+including after a failed refresh. Each failed dataset refresh is marked stale if
+its existing nonempty data remains readable. Status publication failure preserves
+the previous file and fails the run, but does not suppress an otherwise safe
+backup. See [local data status](../data-status.md).
+
 `run_daily.py` MUST exit with a non-zero status when any step failed, so that an unattended
 scheduler can distinguish a bad run from a good one. Steps MUST still be isolated from each
 other: a failure MUST NOT prevent later steps from running.

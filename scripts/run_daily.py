@@ -60,7 +60,9 @@ from fetch_symbol_meta import refresh_symbol_meta
 from fetch_value_chain_classification import refresh_value_chain_classification
 
 from config import config
+from shp_utils.data_status import write_data_status
 from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
+from shp_utils.official_api import MarketFetchCounts
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
 
     cache_failures: list[str] = []
     other_failures: list[str] = []
+    failed_datasets: set[str] = set()
 
     logger.info("=== 日常更新作業開始 %s ===", datetime.datetime.now())
     log_startup(logger, "run_daily")
@@ -205,15 +208,21 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
         # of the expensive-to-reacquire price data (2026-08-19).
         logger.exception("除權息更新過程中發生錯誤")
         other_failures.append("步驟 3 除權息")
+        failed_datasets.add("corporate_actions")
 
     logger.info("\n--- 步驟 4: 下載官方每日股價 (TWSE/TPEx) ---")
     step_clock.begin("步驟 4")
     try:
         official_counts = run_official_daily_fetch()
         logger.info("official_daily_fetch_counts: %s", official_counts)
+        if isinstance(official_counts, MarketFetchCounts) and official_counts.failed_markets:
+            logger.warning("Official daily refresh failed for markets: %s", sorted(official_counts.failed_markets))
+            failed_datasets.add("official_daily")
+            other_failures.append("步驟 4 官方股價")
     except Exception:
         logger.exception("官方每日股價下載過程中發生錯誤")
         other_failures.append("步驟 4 官方股價")
+        failed_datasets.add("official_daily")
 
     # After the official fetch, not before it. The parquet takes its values from
     # the official artifact now, so building first would leave today's bar
@@ -228,6 +237,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("parquet 重建過程中發生錯誤")
         cache_failures.append("步驟 5 parquet")
+        failed_datasets.add("price_daily")
 
     logger.info("\n--- 步驟 6: 更新上市與上櫃月營收 ---")
     step_clock.begin("步驟 6")
@@ -237,6 +247,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("月營收更新過程中發生錯誤")
         other_failures.append("步驟 6 月營收")
+        failed_datasets.add("monthly_revenue")
 
     # Numbered 6b so the established step numbers in logs and docs keep their meaning.
     # Before step 7, which reads symbol_meta to tell ETFs from stocks, so a newly listed
@@ -249,6 +260,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("證券基本資料更新過程中發生錯誤")
         other_failures.append("步驟 6b 證券基本資料")
+        failed_datasets.add("symbol_meta")
 
     logger.info("\n--- 步驟 7: 下載三大法人每日買賣 (TWSE/TPEx) ---")
     step_clock.begin("步驟 7")
@@ -258,6 +270,7 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("三大法人每日買賣下載過程中發生錯誤")
         other_failures.append("步驟 7 三大法人")
+        failed_datasets.add("institutional")
 
     logger.info("\n--- 步驟 8: 更新官方產業價值鏈分類 ---")
     step_clock.begin("步驟 8")
@@ -275,6 +288,14 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except Exception:
         logger.exception("資料完整性檢查過程中發生錯誤")
         other_failures.append("步驟 9 完整性檢查")
+
+    logger.info("\n--- 步驟 9b: 更新資料狀態 ---")
+    step_clock.begin("步驟 9b")
+    try:
+        write_data_status(config.DATA_DIR, failed_datasets=failed_datasets)
+    except Exception:
+        logger.exception("資料狀態寫入失敗；保留上一份狀態")
+        other_failures.append("步驟 9b 資料狀態")
 
     logger.info("\n--- 步驟 10: 備份資料快取 ---")
     step_clock.begin("步驟 10")
