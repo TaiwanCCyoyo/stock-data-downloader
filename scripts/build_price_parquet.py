@@ -150,13 +150,13 @@ def attach_moving_averages(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_price_parquet(data_dir: Path | str, db_path: Path | None = None, *, technical_features: bool = False) -> Path:
-    """Consolidate the official artifact and the day CSVs into price_daily.parquet."""
+    """Consolidate prices, raising ValueError when no usable day CSVs exist."""
     data_dir = Path(data_dir)
     db_path = db_path or data_dir / "official_daily.sqlite"
 
     shioaji_frames = load_shioaji_frames(data_dir)
     if not shioaji_frames:
-        raise SystemExit(f"no usable day CSV files under {data_dir}")
+        raise ValueError(f"no usable day CSV files under {data_dir}")
     shioaji = pd.concat(shioaji_frames, ignore_index=True)
     shioaji["Source"] = SOURCE_SHIOAJI
 

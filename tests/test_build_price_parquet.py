@@ -62,6 +62,15 @@ def _build_and_read(data_dir: Path) -> pd.DataFrame:
     return pd.read_parquet(data_dir / "price_daily.parquet")
 
 
+@pytest.mark.parametrize("unusable_csv", [False, True])
+def test_no_usable_day_csv_is_an_ordinary_library_error(tmp_path: Path, unusable_csv: bool) -> None:
+    if unusable_csv:
+        (tmp_path / "2330_day.csv").write_text("Close\n100\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no usable day CSV files"):
+        build_price_parquet.build_price_parquet(tmp_path)
+    assert not (tmp_path / "price_daily.parquet").exists()
+
+
 def test_summary_names_the_latest_bar_and_how_many_symbols_carry_it(tmp_path: Path, caplog: pytest.LogCaptureFixture):
     """Row and symbol totals alone cannot tell a fresh cache from a frozen one --
     on 2026-08-27 and 08-28 this line reported identical totals two nights running

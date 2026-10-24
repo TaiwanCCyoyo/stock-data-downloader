@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
+from pathlib import Path
+from threading import Event
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import run_daily
 
@@ -427,6 +432,57 @@ def test_status_failure_fails_run_without_suppressing_backup(monkeypatch: pytest
     monkeypatch.setattr(run_daily, "write_data_status", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("replace failed")))
     assert run_daily.main() == 1
     assert "backup" in call_order
+
+
+@pytest.mark.parametrize("existing_cache", [False, True])
+def test_no_day_csv_still_publishes_status_and_skips_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_cache: bool) -> None:
+    builder, publisher = run_daily.build_price_parquet, run_daily.write_data_status
+    cache = tmp_path / "price_daily.parquet"
+    if existing_cache:
+        pq.write_table(pa.table({"Code": ["2330"], "Date": ["2026-10-23"]}), cache)
+    previous = cache.read_bytes() if existing_cache else None
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order, downloaded_count=0)
+    monkeypatch.setattr(run_daily, "DEFAULT_DATA_PATH", tmp_path)
+    monkeypatch.setattr(run_daily.config, "DATA_DIR", tmp_path)
+
+    def rebuild(root: Path) -> Path:
+        call_order.append("parquet")
+        return builder(root)
+
+    def publish(root: Path, *, failed_datasets: set[str]) -> dict:
+        call_order.append("status")
+        return publisher(root, failed_datasets=failed_datasets)
+
+    monkeypatch.setattr(run_daily, "build_price_parquet", rebuild)
+    monkeypatch.setattr(run_daily, "write_data_status", publish)
+    assert run_daily.main() == 1
+    assert call_order.index("parquet") < call_order.index("health_check") < call_order.index("status")
+    assert "monthly_revenue" in call_order and "institutional_fetch" in call_order
+    assert "backup" not in call_order
+    payload = json.loads((tmp_path / "data-status.json").read_text(encoding="utf-8"))
+    price = next(item for item in payload["datasets"] if item["id"] == "price_daily")
+    assert price["status"] == ("stale" if existing_cache else "missing")
+    assert price["rows"] == (1 if existing_cache else None)
+    assert all(item["status"] == "missing" for item in payload["datasets"] if item["id"] != "price_daily")
+    assert (cache.read_bytes() if cache.exists() else None) == previous
+
+
+@pytest.mark.parametrize("signal", [KeyboardInterrupt(), SystemExit(17)])
+def test_parquet_termination_signals_are_not_swallowed(monkeypatch: pytest.MonkeyPatch, signal: BaseException) -> None:
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "start_heartbeat", lambda *_a, **_kw: Event())
+
+    def interrupt(_root: Path) -> Path:
+        raise signal
+
+    monkeypatch.setattr(run_daily, "build_price_parquet", interrupt)
+    monkeypatch.setattr(run_daily, "write_data_status", lambda *_a, **_kw: call_order.append("status"))
+    with pytest.raises(type(signal)) as caught:
+        run_daily.main()
+    assert caught.value is signal
+    assert "monthly_revenue" not in call_order and "status" not in call_order and "backup" not in call_order
 
 
 @pytest.mark.parametrize("failed_markets", [set(), {"TWSE"}])

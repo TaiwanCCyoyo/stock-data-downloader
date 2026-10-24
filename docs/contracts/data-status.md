@@ -6,6 +6,13 @@ before backup, including runs with failed refresh steps. A standalone
 `uv run scripts/write_data_status.py` reads existing artifacts and writes only this
 summary; it neither downloads nor repairs data.
 
+No usable daily CSV input is an ordinary data-validation failure from the Parquet
+library entry point. The runner records it as a failed cache refresh, continues
+to publish the status summary, returns nonzero, and skips backup. A readable old
+Parquet remains untouched and is marked stale; an absent cache is marked missing.
+Process termination signals, including `KeyboardInterrupt` and explicit
+`SystemExit`, still propagate rather than being treated as refresh failures.
+
 The 2026-10-24 read-only audit measured 28,029,043 official-price rows over 51,414
 distinct source codes; that full aggregate took 54.658 seconds on local disk.
 Each SQLite aggregate has a 120-second deadline, and per-artifact elapsed times
