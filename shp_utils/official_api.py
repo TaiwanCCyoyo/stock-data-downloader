@@ -43,6 +43,14 @@ RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504, 507, 509,
 T = TypeVar("T")
 
 
+class MarketFetchCounts(dict[str, int]):
+    """Backward-compatible row counts with failures kept distinct from empty data."""
+
+    def __init__(self, counts: dict[str, int] | None = None, *, failed_markets: set[str] | None = None) -> None:
+        super().__init__(counts or {})
+        self.failed_markets = set(failed_markets or ())
+
+
 class ResponseTooLargeError(RuntimeError):
     """Raised without retry when an official response exceeds its byte budget."""
 

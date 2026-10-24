@@ -35,6 +35,12 @@ certificate. Events need not happen every day, so corporate-action freshness
 uses observation time only. A failed daily refresh forces that dataset to `stale`
 when existing nonempty data can still be read.
 
+Official-price row counts carry a separate `failed_markets` set. A caught bulk or
+dated-supplement failure marks the dataset stale and makes the daily run fail even
+when another market succeeded. Successful zero-row responses have no failure flag;
+zero alone is never used as evidence of an error. The mapping's existing count keys
+and values remain compatible with callers.
+
 SQLite opens with `mode=ro` and reads committed WAL contents. Inputs are checked
 for size/modification changes (including WAL) across a read. Parquet scans only
 Code/Date in bounded batches. No table is created or modified. Readers must not

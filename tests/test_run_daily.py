@@ -427,3 +427,20 @@ def test_status_failure_fails_run_without_suppressing_backup(monkeypatch: pytest
     monkeypatch.setattr(run_daily, "write_data_status", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("replace failed")))
     assert run_daily.main() == 1
     assert "backup" in call_order
+
+
+@pytest.mark.parametrize("failed_markets", [set(), {"TWSE"}])
+def test_caught_official_failure_is_distinct_from_successful_zero_rows(monkeypatch: pytest.MonkeyPatch, failed_markets: set[str]) -> None:
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    counts = run_daily.MarketFetchCounts({"TWSE": 0, "TPEx": 3}, failed_markets=failed_markets)
+    monkeypatch.setattr(run_daily, "run_official_daily_fetch", lambda: counts)
+    received: list[set[str]] = []
+
+    def status(_root: object, *, failed_datasets: set[str]) -> None:
+        received.append(set(failed_datasets))
+
+    monkeypatch.setattr(run_daily, "write_data_status", status)
+    assert run_daily.main() == int(bool(failed_markets))
+    assert received == [{"official_daily"} if failed_markets else set()]
+    assert "parquet" in call_order and "backup" in call_order

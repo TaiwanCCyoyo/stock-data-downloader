@@ -62,6 +62,7 @@ from fetch_value_chain_classification import refresh_value_chain_classification
 from config import config
 from shp_utils.data_status import write_data_status
 from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
+from shp_utils.official_api import MarketFetchCounts
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,10 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     try:
         official_counts = run_official_daily_fetch()
         logger.info("official_daily_fetch_counts: %s", official_counts)
+        if isinstance(official_counts, MarketFetchCounts) and official_counts.failed_markets:
+            logger.warning("Official daily refresh failed for markets: %s", sorted(official_counts.failed_markets))
+            failed_datasets.add("official_daily")
+            other_failures.append("步驟 4 官方股價")
     except Exception:
         logger.exception("官方每日股價下載過程中發生錯誤")
         other_failures.append("步驟 4 官方股價")
