@@ -13,9 +13,15 @@ uv run scripts/run_daily.py
 
 The order is download → minute-to-daily conversion → corporate actions for both
 markets → official daily prices → parquet rebuild → monthly revenue → symbol metadata (weekly) → institutional
-reports → value-chain classification → integrity check → backup. The official fetch
+reports → value-chain classification → integrity check → data status → backup. The official fetch
 must precede the parquet rebuild; backup runs last. See the
 [orchestration contract](contracts/daily-update-orchestration/spec.md).
+
+`data-status.json` is a small summary of the six principal local datasets: period,
+observation time, row/code counts, and conservative freshness. It is written
+atomically even when a refresh failed. To refresh only this summary, without
+downloading or modifying source tables, run `uv run scripts/write_data_status.py`
+when writers are idle. See [the status contract](contracts/data-status.md).
 
 The official step also attempts TWSE's dated MI_INDEX when TWSE bulk has no
 usable dated rows or trails a successful TPEx bulk date. The TPEx date is the

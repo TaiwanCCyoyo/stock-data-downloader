@@ -36,6 +36,7 @@ def _patch_all_steps(monkeypatch: pytest.MonkeyPatch, call_order: list[str], *, 
     )
     monkeypatch.setattr(run_daily, "refresh_symbol_meta", lambda: record_step("symbol_meta", False))
     monkeypatch.setattr(run_daily, "run_health_check", lambda *_a, **_kw: call_order.append("health_check"))
+    monkeypatch.setattr(run_daily, "write_data_status", lambda *_a, **_kw: None)
     monkeypatch.setattr(run_daily, "run_backup", lambda *_a, **_kw: record_step("backup", True))
 
 
@@ -402,3 +403,27 @@ def test_parquet_rebuild_runs_after_the_official_fetch(monkeypatch: pytest.Monke
     run_daily.main()
 
     assert call_order.index("official_fetch") < call_order.index("parquet")
+
+
+def test_status_runs_before_backup_even_after_a_failed_refresh(monkeypatch: pytest.MonkeyPatch):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "run_institutional_fetch", lambda: (_ for _ in ()).throw(RuntimeError("unavailable")))
+    received: list[set[str]] = []
+
+    def status(_root: object, *, failed_datasets: set[str]) -> None:
+        call_order.append("status")
+        received.append(failed_datasets)
+
+    monkeypatch.setattr(run_daily, "write_data_status", status)
+    assert run_daily.main() == 1
+    assert call_order.index("health_check") < call_order.index("status") < call_order.index("backup")
+    assert received == [{"institutional"}]
+
+
+def test_status_failure_fails_run_without_suppressing_backup(monkeypatch: pytest.MonkeyPatch):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "write_data_status", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("replace failed")))
+    assert run_daily.main() == 1
+    assert "backup" in call_order
