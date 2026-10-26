@@ -78,6 +78,60 @@ owner approves their cleanup.
 
 ## Import record
 
-| Date (Asia/Taipei) | Package run | Result |
-| --- | --- | --- |
-| 2026-10-27 | `20261024T212808+0800-codex-10f5e23f` | See below. |
+### 2026-10-27: pre-2019 history, package `20261024T212808+0800-codex-10f5e23f`
+
+Acquired 2026-10-24/25 with the unchanged fetcher at producer commit `ee4171b`
+(package payload digest `64c7fef2...c58d5`); imported 2026-10-27 00:42-00:49 by
+`import_institutional_staging.py` at `35d3037`. The raw snapshots were then moved
+from a temporary `raw/institutional/imports/<run-id>/` tree into the ordinary
+`raw/institutional/<market>/` tree (commit `826503a` makes that the importer's
+behavior), and their `raw_path` values updated in one transaction.
+
+| Market | Year | Rows | Dates | Codes |
+| --- | --- | ---: | ---: | ---: |
+| TWSE | 2012 (from 05-02) | 132,210 | 172 | 865 |
+| TWSE | 2013 | 192,078 | 246 | 901 |
+| TWSE | 2014 | 204,631 | 248 | 918 |
+| TWSE | 2015 | 205,576 | 244 | 945 |
+| TWSE | 2016 | 204,278 | 244 | 991 |
+| TWSE | 2017 | 216,495 | 246 | 1,046 |
+| TWSE | 2018 | 231,011 | 247 | 1,089 |
+| TPEx | 2014 (from 12-01) | 8,983 | 24 | 540 |
+| TPEx | 2015 | 101,687 | 244 | 700 |
+| TPEx | 2016 | 113,737 | 244 | 732 |
+| TPEx | 2017 | 122,096 | 246 | 756 |
+| TPEx | 2018 | 120,532 | 247 | 796 |
+
+2,652 `ok` units and 1,853,314 rows were inserted; 0 skipped, 0 conflicts, 0
+rejected (the target held no pre-2019 rows or checkpoints). Verification: every
+pre-existing market/year group of both tables (2019-2026, including the 18 open
+2026 `partial` checkpoints) has the same row count and all-column SHA-256 as the
+pre-import online backup; `schema_meta` and `sqlite_master` are unchanged; every
+imported unit equals its staged rows and checkpoint, and every raw file matches its
+recorded digest; `PRAGMA integrity_check` is `ok`.
+
+What the import does not establish:
+
+- **TWSE lower bound.** T86 answered 2012-04-30 with an explicit floor message
+  naming 101/05/02 (2012-05-02, digest `c54064f8...cbae1c`). That bounds this
+  endpoint only, not every official TWSE source.
+- **TPEx lower bound is unknown.** The earliest nonempty report is 2014-12-01. All
+  106 price-calendar dates 2014-07-01 to 2014-11-28 returned empty and were not
+  imported (no checkpoint written, so a later backfill may retry them). Dates before
+  2014-07-01 were never scanned; `FIRST_TPEX_DATE` is a scan bound, not evidence.
+- **2018-12-29 to 12-31.** Both markets returned empty for these three calendar
+  days (6 units). The price calendar ends 2018-12-28; the empties were not imported
+  and are not certified as holidays.
+- **Not point-in-time.** `published_at` is null and `fetched_at` is the 2026-10-24
+  acquisition time, not historical publication time. Because `data-status.json`
+  reports the maximum `fetched_at`, its institutional `last_updated` may now come
+  from this backfill rather than the newest daily fetch.
+- **Identity.** `instrument_type` is `unknown` for every imported row: current
+  symbol metadata is not evidence of historical classification, so filters on
+  `instrument_type = 'stock'` exclude all pre-2019 rows. Names are the source-era
+  names.
+- **Combined period.** `data-status.json` reports one institutional period across
+  both markets (`from` 2012-05-02); TPEx starts 2014-12-01.
+
+The staging package, its copy in the backup mirror and the pre-import backup were
+deleted with owner approval after this verification.
