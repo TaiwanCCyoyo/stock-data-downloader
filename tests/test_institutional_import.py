@@ -90,7 +90,7 @@ def env(tmp_path: Path) -> dict[str, Any]:
         institutional.upsert_rows(
             conn, schema.normalize_twse_payload(_twse_payload({"2330": "9"}), date(2019, 1, 2), fetched_at="2026-09-03T00:00:00+00:00")[0]
         )
-    return {"package": package, "target": target, "data": data, "receipts": data / "raw/institutional/imports" / RUN_ID / "receipts", "units": units}
+    return {"package": package, "target": target, "data": data, "receipts": tmp_path / "receipts", "units": units}
 
 
 def _apply(env: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -108,7 +108,7 @@ def test_dry_run_plans_inserts_and_writes_nothing(env: dict[str, Any]) -> None:
     assert [p["kind"] for p in plan["plans"]] == ["insert"] * 3
     assert plan["unresolved_units"] == 1
     assert importer.content_digest(env["target"]) == before
-    assert not (env["data"] / "raw/institutional/imports").exists()
+    assert not (env["data"] / "raw").exists()
 
 
 def test_apply_inserts_relocates_raw_and_preserves_existing(env: dict[str, Any]) -> None:
@@ -122,7 +122,8 @@ def test_apply_inserts_relocates_raw_and_preserves_existing(env: dict[str, Any])
         logs = conn.execute("SELECT market, date, status, raw_path, sha256 FROM institutional_fetch_log ORDER BY market, date").fetchall()
     assert [row[:3] for row in logs] == [("TPEx", "2014-12-01", "ok"), ("TWSE", "2012-05-02", "ok"), ("TWSE", "2012-05-03", "ok")]
     for _, _, _, raw_path, sha in logs:
-        assert raw_path.startswith(f"raw/institutional/imports/{RUN_ID}/")
+        assert raw_path == f"raw/institutional/{raw_path.split('/')[2]}/{Path(raw_path).name}"
+        assert raw_path.split("/")[2] in {"twse", "tpex"}
         assert importer.file_sha256(env["data"] / raw_path) == sha
     assert _count(env["target"], "SELECT COUNT(*) FROM institutional_fetch_log WHERE status <> 'ok'") == 0
 
@@ -168,7 +169,7 @@ def test_conflicting_row_is_reported_and_unit_untouched(env: dict[str, Any], mar
 
 def test_raw_name_collision_with_other_bytes_is_a_conflict(env: dict[str, Any]) -> None:
     unit = env["units"][0]
-    dest = env["data"] / importer.relocated_raw_path(RUN_ID, unit["raw_path"])
+    dest = env["data"] / importer.target_raw_path(unit["raw_path"])
     dest.parent.mkdir(parents=True)
     dest.write_bytes(b"different")
     summary = _apply(env)

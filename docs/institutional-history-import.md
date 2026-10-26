@@ -36,21 +36,24 @@ already present aborts the transaction instead of changing it.
   Different content, a different market on the same `(date, code)`, extra target
   rows, rows without a checkpoint or a checkpoint with another status are conflicts:
   the unit is left untouched and reported.
-- **Raw first.** Each inserted unit's raw snapshot is copied to
-  `raw/institutional/imports/<run-id>/<market>/<file>` with exclusive creation and a
-  re-read digest check. An existing file is reused only when its digest matches;
-  a different file of that name is a conflict and is never replaced. The checkpoint's
-  `raw_path` is rewritten to that DB-relative location, so nothing refers to staging.
+- **Raw first.** Each inserted unit's raw snapshot is copied into the ordinary raw
+  tree, `raw/institutional/<market>/<file>` (the fetcher's own layout and file name,
+  which carries the acquisition timestamp), with exclusive creation and a re-read
+  digest check. There is no separate imports tree: imported history is maintained
+  with the rest of the artifact. An existing file is reused only when its digest
+  matches; a different file of that name is a conflict and is never replaced. The
+  checkpoint's `raw_path` is that DB-relative location, so nothing refers to staging.
   `fetched_at` keeps the acquisition time; the import time lives in the receipt.
 - **Bounded transactions.** Units are committed in batches under `BEGIN IMMEDIATE`;
   the plan is re-checked inside the transaction. Any failure rolls the batch back.
   Raw files already preserved for a rolled-back batch are listed in the receipt and
   kept.
-- **Re-runnable.** A unit whose checkpoint already carries the relocated `raw_path`
+- **Re-runnable.** A unit whose checkpoint already carries the same `raw_path`
   and digest and whose rows are equivalent is reported as already imported, so a
   crash between a commit and its receipt entry cannot duplicate work.
 - **Receipt.** `import-receipt.jsonl` (append-only, fsynced per event) and
-  `import-summary.json` record the package run id and payload digest, code commit,
+  `import-summary.json` in the explicit `--receipt-dir` (outside the data
+  directory; the durable outcome is summarized in the import record below) record the package run id and payload digest, code commit,
   per-batch units and rows, skips, conflicts, rejections and the units left
   unresolved.
 - **Writer safety.** Writes refuse to start a batch inside the weekday 18:00-18:45

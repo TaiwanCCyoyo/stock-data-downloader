@@ -41,7 +41,6 @@ LOG_COLUMNS = (
 # Observation metadata, not report content: compared and reported separately.
 NON_CONTENT_COLUMNS = frozenset({"fetched_at", "instrument_type"})
 SCHEMA_VERSION = "3"
-IMPORTS_SUBDIR = ("raw", "institutional", "imports")
 _RUN_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z+_.-]*$")
 _STAGED_RAW = re.compile(r"^raw/institutional/(twse|tpex)/([0-9A-Za-z+_.-]+\.json)$")
 
@@ -129,11 +128,12 @@ def _table_shape(conn: sqlite3.Connection, table: str) -> dict[str, tuple[str, i
     return {str(r[1]): (str(r[2]).upper(), int(r[3]), int(r[5])) for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def relocated_raw_path(run_id: str, staged_raw_path: str) -> str:
+def target_raw_path(staged_raw_path: str) -> str:
+    """The same DB-relative location the fetcher uses, so imported raw joins the ordinary tree."""
     match = _STAGED_RAW.match(staged_raw_path)
     if match is None:
         raise InstitutionalImportError(f"unexpected staged raw path {staged_raw_path!r}")
-    return "/".join((*IMPORTS_SUBDIR, run_id, match.group(1), match.group(2)))
+    return f"raw/institutional/{match.group(1)}/{match.group(2)}"
 
 
 def select_candidates(package: Package, staging: sqlite3.Connection, cutoff: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -188,7 +188,7 @@ def plan_unit(target: sqlite3.Connection, staging: sqlite3.Connection, unit: dic
         "SELECT status, row_count, raw_path, sha256 FROM institutional_fetch_log WHERE market = ? AND date = ?",
         (market, day),
     ).fetchone()
-    new_raw = relocated_raw_path(run_id, unit["raw_path"])
+    new_raw = target_raw_path(unit["raw_path"])
     plan = UnitPlan(market, day, "insert", len(staged))
 
     extra = [code for code, row in existing.items() if row["market"] == market and code not in staged]
@@ -233,8 +233,8 @@ def _conflict(plan: UnitPlan, detail: str) -> UnitPlan:
 
 
 def preserve_raw(package: Package, unit: dict[str, Any], target_root: Path) -> tuple[str, bool]:
-    """Copy one staged snapshot into the target's imports tree. Returns (path, created)."""
-    rel = relocated_raw_path(package.run_id, unit["raw_path"])
+    """Copy one staged snapshot into the target's raw tree. Returns (path, created)."""
+    rel = target_raw_path(unit["raw_path"])
     dest = target_root / rel
     if dest.exists():
         if file_sha256(dest) != unit["sha256"]:
@@ -266,7 +266,7 @@ def insert_unit(target: sqlite3.Connection, staging: sqlite3.Connection, unit: d
     log = dict(
         zip(LOG_COLUMNS, staging.execute(f"SELECT {log_columns} FROM institutional_fetch_log WHERE market = ? AND date = ?", key).fetchone(), strict=True)
     )
-    log["raw_path"] = relocated_raw_path(run_id, log["raw_path"])
+    log["raw_path"] = target_raw_path(log["raw_path"])
     target.execute(f"INSERT INTO institutional_fetch_log ({log_columns}) VALUES ({', '.join('?' * len(LOG_COLUMNS))})", [log[c] for c in LOG_COLUMNS])
     return len(rows)
 
