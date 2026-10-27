@@ -41,6 +41,8 @@ LOG_COLUMNS = (
 # Observation metadata, not report content: compared and reported separately.
 NON_CONTENT_COLUMNS = frozenset({"fetched_at", "instrument_type"})
 SCHEMA_VERSION = "3"
+STAGING_DB = "institutional.sqlite"
+NEWLINE = b"\n"
 _RUN_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z+_.-]*$")
 _STAGED_RAW = re.compile(r"^raw/institutional/(twse|tpex)/([0-9A-Za-z+_.-]+\.json)$")
 
@@ -84,6 +86,9 @@ def load_package(root: Path, *, verify_files: bool = True) -> Package:
     run_id = str(manifest["run_id"])
     if not _RUN_ID.match(run_id) or run_id in {".", ".."}:
         raise InstitutionalImportError(f"unsafe run id {run_id!r}")
+    # The database is the source of every imported row, so it must be one of the verified files.
+    if STAGING_DB not in {entry["path"] for entry in files}:
+        raise InstitutionalImportError(f"manifest files do not list {STAGING_DB}; its content would be unverified")
     if verify_files:
         bad = [
             entry["path"]
@@ -98,7 +103,7 @@ def load_package(root: Path, *, verify_files: bool = True) -> Package:
 
 
 def open_staging(package: Package) -> sqlite3.Connection:
-    path = package.root / "institutional.sqlite"
+    path = package.root / STAGING_DB
     return sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro&immutable=1", uri=True)
 
 
@@ -275,6 +280,14 @@ class Receipt:
     def __init__(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / "import-receipt.jsonl"
+        # An earlier run interrupted mid-append leaves a partial last line. Keep it as evidence,
+        # but start on a fresh line so it cannot merge with this run's first event.
+        if self.path.is_file() and self.path.stat().st_size and not self.path.read_bytes().endswith(NEWLINE):
+            with self.path.open("ab") as handle:
+                handle.write(NEWLINE)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self.write("receipt_tail_incomplete", detail="previous run ended mid-append; its partial line above is kept")
 
     def write(self, event: str, **payload: Any) -> None:
         record = {"event": event, "at": datetime.now(UTC).isoformat(timespec="seconds"), **payload}
@@ -343,6 +356,7 @@ def run_import(
         pending = [by_key[(p.market, p.date)] for p in plans if p.kind == "insert"]
         final: dict[tuple[str, str], UnitPlan] = {(p.market, p.date): p for p in plans}
         stopped = None
+        committed_keys: set[tuple[str, str]] = set()
         for start in range(0, len(pending), batch_units):
             reason = may_start_batch()
             if reason:
@@ -369,17 +383,13 @@ def run_import(
                 receipt.write("batch_rolled_back", error=str(exc), units=[f"{u['market']} {u['date']}" for u in batch], raw_kept=[p for p, _ in preserved])
                 raise
             receipt.write("batch_committed", units=committed, rows=sum(u["rows"] for u in committed))
+            committed_keys |= {(u["market"], u["date"]) for u in committed}
             logger.info(
                 "committed batch of %d unit(s), %d row(s); %d unit(s) left",
                 len(committed),
                 sum(u["rows"] for u in committed),
                 len(pending) - start - len(batch),
             )
-        committed_keys = set()
-        for line in receipt.path.read_text(encoding="utf-8").splitlines():
-            record = json.loads(line)
-            if record["event"] == "batch_committed":
-                committed_keys |= {(u["market"], u["date"]) for u in record["units"]}
         for key, plan in final.items():
             if plan.kind == "insert" and key not in committed_keys:
                 plan.kind = "not_started"

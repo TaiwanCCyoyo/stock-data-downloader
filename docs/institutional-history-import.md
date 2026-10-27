@@ -21,7 +21,7 @@ already present aborts the transaction instead of changing it.
   are required. Nothing falls back to `config.DATA_DIR`, and the importer never
   creates the target database or runs the fetcher's schema initializer against it.
 - **Package integrity first.** Every manifest file's size and SHA-256, and the
-  manifest's payload digest, are recomputed before planning or writing. The staging
+  manifest's payload digest, are recomputed before planning or writing. The manifest must list `institutional.sqlite` itself; a package whose database is not among the verified files is refused. The staging
   database is opened `immutable=1`, so the sealed package gains no sidecar files.
 - **Candidates.** Only `manifest.importable_units` whose staging checkpoint is `ok`
   with a positive matching row count, a matching raw digest and a date on or before
@@ -55,7 +55,9 @@ already present aborts the transaction instead of changing it.
   `import-summary.json` in the explicit `--receipt-dir` (outside the data
   directory; the durable outcome is summarized in the import record below) record the package run id and payload digest, code commit,
   per-batch units and rows, skips, conflicts, rejections and the units left
-  unresolved.
+  unresolved. A partial last line left by an interrupted append is kept; the next run
+  starts on a fresh line and records `receipt_tail_incomplete`. The summary is built
+  from this run's commits, never by re-parsing the receipt.
 - **Writer safety.** Writes refuse to start a batch inside the weekday 18:00-18:45
   Asia/Taipei window, while any `StockProject-*` task is running, or after
   `--deadline`.

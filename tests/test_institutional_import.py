@@ -217,3 +217,24 @@ def test_backup_snapshot_matches_live(env: dict[str, Any], tmp_path: Path) -> No
     assert record["integrity_check"] == ["ok"] and record["content_digest_matches_live"]
     with pytest.raises(importer.InstitutionalImportError):
         importer.backup_database(env["target"], env["data"] / "inside")
+
+
+def test_manifest_must_verify_the_staging_database(env: dict[str, Any]) -> None:
+    manifest = json.loads((env["package"] / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != importer.STAGING_DB]
+    manifest["payload_digest"]["value"] = hashlib.sha256(json.dumps(manifest["files"], sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    (env["package"] / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(importer.InstitutionalImportError, match="do not list"):
+        importer.load_package(env["package"])
+
+
+def test_rerun_after_truncated_receipt_tail(env: dict[str, Any]) -> None:
+    _apply(env)
+    receipt = env["receipts"] / "import-receipt.jsonl"
+    with receipt.open("a", encoding="utf-8") as handle:
+        handle.write('{"event":')
+    summary = _apply(env)
+    assert summary["by_market_year"]["TWSE"]["2012"] == {"already_imported_rows": 3, "already_imported_units": 2}
+    lines = receipt.read_text(encoding="utf-8").splitlines()
+    assert '{"event":' in lines
+    assert json.loads(lines[lines.index('{"event":') + 1])["event"] == "receipt_tail_incomplete"
