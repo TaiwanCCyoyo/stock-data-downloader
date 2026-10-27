@@ -71,20 +71,22 @@ def _leads_index(connection: sqlite3.Connection, table: str, column: str) -> boo
     return False
 
 
-def _sqlite_stats(path: Path, dataset: Dataset) -> dict[str, Any]:
+def _sqlite_stats(path: Path, dataset: Dataset, deadline: float) -> dict[str, Any]:
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
     # This is a once-per-refresh inventory, not an interactive request. One
     # statement mixing these aggregates reads the whole table (16 GB for official
     # prices) and exceeded this deadline on a cold cache; grouping by code lets
-    # SQLite answer counts and period bounds from one (code, period) index pass.
-    deadline = time.monotonic() + SQLITE_READ_SECONDS
+    # SQLite answer counts and period bounds from one pass, over a (code, period)
+    # index where the artifact has one. The deadline is shared by every read of
+    # the artifact, retries included.
     try:
         connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10_000)
         connection.execute("BEGIN")  # one snapshot for every statement below
         # Expressions come only from the static definitions above, never user input.
         row = connection.execute(
-            f"SELECT TOTAL(n), COUNT(*), MIN(lo), MAX(hi) FROM "
-            f"(SELECT COUNT(*) AS n, MIN({dataset.period}) AS lo, MAX({dataset.period}) AS hi FROM {dataset.table} GROUP BY code)"
+            # COUNT(code) skips the NULL-code group, as COUNT(DISTINCT code) did.
+            f"SELECT TOTAL(n), COUNT(code), MIN(lo), MAX(hi) FROM "
+            f"(SELECT code, COUNT(*) AS n, MIN({dataset.period}) AS lo, MAX({dataset.period}) AS hi FROM {dataset.table} GROUP BY code)"
         ).fetchone()
         assert row is not None
         rows, symbols, first, last = int(row[0]), row[1], row[2], row[3]
@@ -152,9 +154,12 @@ class ArtifactChanged(ValueError):
 
 def _stable_stats(source: Path, dataset: Dataset) -> dict[str, Any]:
     """Read once more if the artifact moved mid-read; a WAL checkpoint by another reader can do that."""
+    deadline = time.monotonic() + SQLITE_READ_SECONDS
     for attempt in range(1, STABLE_READ_ATTEMPTS + 1):
+        if attempt > 1 and time.monotonic() >= deadline:
+            raise sqlite3.OperationalError("interrupted")
         before = _identity(source)
-        stats = _sqlite_stats(source, dataset) if dataset.table else _parquet_stats(source)
+        stats = _sqlite_stats(source, dataset, deadline) if dataset.table else _parquet_stats(source)
         if before == _identity(source):
             return stats
         LOGGER.info("Data status dataset=%s changed during read attempt %d", dataset.id, attempt)

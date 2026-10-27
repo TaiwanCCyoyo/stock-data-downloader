@@ -19,15 +19,29 @@ Each SQLite artifact has one 120-second deadline across its reads, and
 per-artifact elapsed times are logged. This work happens during refresh, never
 during a page request.
 
-Reads avoid a full-table pass. Rows, codes and period bounds come from one
-`GROUP BY code` pass over the artifact's `(code, period)` index. The single
-mixed aggregate used before 2026-10-28 read the whole table instead: 16 GB for
-official prices. It exceeded the deadline in the daily runs of 2026-10-26 and
-2026-10-27, publishing healthy official-price and institutional data as
-`missing`. Measured on 2026-10-28 with a warm cache, the new reads took 8.5
-seconds for official prices and 1.2 seconds for institutional data. One cold
-`(code, date)` index pass over official prices took about 30 seconds. All reads
-of an artifact share one SQLite snapshot.
+Rows, codes and period bounds come from one `GROUP BY code` statement. Its plan
+depends on each artifact's indexes:
+
+| Artifact                                               | Plan                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------ |
+| Official prices, institutional data, corporate actions | Scan the `(code, date)` covering index, without reading table rows |
+| Monthly revenue                                        | Scan its `(revenue_month, code)` index with a temporary GROUP BY   |
+| Symbol metadata                                        | Read the table, which is small                                     |
+
+Codes count as before: rows with a NULL code are counted but are not a symbol.
+
+The single mixed aggregate used before 2026-10-28 read the whole table instead:
+16 GB for official prices. It exceeded the deadline in the daily runs of
+2026-10-26 and 2026-10-27, publishing healthy official-price and institutional
+data as `missing`.
+
+Measured on 2026-10-28 with a warm cache, the new reads took 8.5 seconds for
+official prices and 1.2 seconds for institutional data. After a reboot, one cold
+`(code, date)` index pass over official prices took about 30 seconds. A complete
+cold collection has not been measured.
+
+All reads of an artifact share one SQLite snapshot and one deadline. That
+deadline includes the stability retry, which never starts after it has passed.
 
 The JSON object has `schema: "producer-data-status.v1"`, a UTC `generated_at`, and
 `datasets`. Each dataset has `id`, a plain Chinese `name`, `data_period` with
@@ -64,7 +78,8 @@ For dated data (official prices, institutional reports, monthly revenue),
 `last_updated` is the latest fetch timestamp among the rows of the newest stored
 period: when the newest data was last observed. A historical backfill of old
 periods therefore does not make the dataset look recently updated. When no index
-leads with the period column, each code's newest row is found by index seek. For
+leads with the period column (official prices), a `DISTINCT code` index scan
+finds each code and an index seek reads its newest-period row. For
 observation-only data (corporate actions, symbol metadata), `last_updated` is
 the maximum stored fetch timestamp. Parquet uses its file modification time. Both the observation and the period must be recent for daily
 and monthly data. Freshness is a conservative calendar-day heuristic, allowing
