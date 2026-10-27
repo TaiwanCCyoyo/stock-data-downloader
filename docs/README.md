@@ -42,6 +42,7 @@ authorize a new capture or production refresh.
 | Subject                                | Guide                                                           |
 | -------------------------------------- | --------------------------------------------------------------- |
 | Institutional reports and availability | [institutional-sources](institutional-sources.md)               |
+| Staged institutional history import     | [institutional-history-import](institutional-history-import.md) |
 | TPEx history and roster definitions    | [tpex-history-sources](tpex-history-sources.md)                 |
 | TWSE dated whole-market quotes         | [twse-market-day-source](twse-market-day-source.md)             |
 | 2026-10-04 official data repair        | [data-gap-repair-20261004](data-gap-repair-20261004.md)         |
