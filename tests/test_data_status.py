@@ -103,8 +103,8 @@ def test_changed_artifact_is_not_published_as_healthy(tmp_path: Path, monkeypatc
     create_sqlite(tmp_path, dataset)
     original = data_status._sqlite_stats
 
-    def changing(path: Path, definition: data_status.Dataset) -> dict:
-        stats = original(path, definition)
+    def changing(path: Path, definition: data_status.Dataset, deadline: float) -> dict:
+        stats = original(path, definition, deadline)
         path.write_bytes(path.read_bytes() + b"changed")
         return stats
 
@@ -112,6 +112,7 @@ def test_changed_artifact_is_not_published_as_healthy(tmp_path: Path, monkeypatc
     entry = indexed(tmp_path)[dataset.id]
     assert entry["status"] == "missing"
     assert entry["rows"] is None
+    assert entry["unavailable_reason"] == "changed_during_read"
 
 
 def test_atomic_failure_keeps_previous_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,3 +134,82 @@ def test_successful_publication_is_readable_json(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "data-status.json").read_text(encoding="utf-8")) == payload
     assert payload["schema"] == "producer-data-status.v1"
     assert payload["generated_at"] == NOW.isoformat(timespec="seconds")
+
+
+def test_one_mid_read_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = data_status.DATASETS[0]
+    create_sqlite(tmp_path, dataset)
+    original = data_status._sqlite_stats
+    calls = []
+
+    def changing_once(path: Path, definition: data_status.Dataset, deadline: float) -> dict:
+        calls.append(deadline)
+        stats = original(path, definition, deadline)
+        if len(calls) == 1:
+            path.write_bytes(path.read_bytes() + b"changed")
+        return stats
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", changing_once)
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["status"] == "ok" and len(calls) == 2
+    assert calls[0] == calls[1]  # the retry spends the same budget, it does not get a new one
+    assert "unavailable_reason" not in entry
+
+
+def test_unavailable_entries_name_their_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    create_sqlite(tmp_path, data_status.DATASETS[0])
+
+    def deadline(_path: Path, _definition: data_status.Dataset, _deadline: float) -> dict:
+        raise sqlite3.OperationalError("interrupted")
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", deadline)
+    entries = indexed(tmp_path)
+    assert entries["official_daily"]["unavailable_reason"] == "read_deadline"
+    assert entries["official_daily"]["status"] == "missing" and entries["official_daily"]["rows"] is None
+    assert entries["price_daily"]["unavailable_reason"] == "absent"
+
+
+@pytest.mark.parametrize("period_index", [False, True])
+def test_last_updated_observes_the_newest_period(tmp_path: Path, period_index: bool) -> None:
+    dataset = next(item for item in data_status.DATASETS if item.id == "institutional")
+    create_sqlite(tmp_path, dataset)
+    with sqlite3.connect(tmp_path / dataset.file) as connection:
+        if period_index:
+            connection.execute(f"CREATE INDEX by_period ON {dataset.table} ({dataset.period}, code)")
+        connection.execute(f"INSERT INTO {dataset.table} VALUES ('1101', '2012-05-02', '2026-10-23T23:00:00+00:00')")
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["last_updated"] == RECENT
+    assert entry["rows"] == 3 and entry["symbols"] == 3
+    assert entry["data_period"] == {"from": "2012-05-02", "to": "2026-10-23"}
+
+
+def test_retry_does_not_start_after_the_shared_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = data_status.DATASETS[0]
+    create_sqlite(tmp_path, dataset)
+    clock = [1000.0]
+    monkeypatch.setattr(data_status.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def slow_and_changing(path: Path, _definition: data_status.Dataset, deadline: float) -> dict:
+        calls.append(deadline)
+        clock[0] += 121.0  # one attempt spends the whole shared budget
+        path.write_bytes(path.read_bytes() + b"changed")
+        return {}
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", slow_and_changing)
+    entry = indexed(tmp_path)[dataset.id]
+    assert calls == [1000.0 + data_status.SQLITE_READ_SECONDS]
+    assert entry["unavailable_reason"] == "read_deadline"
+
+
+def test_null_code_is_not_counted_as_a_symbol(tmp_path: Path) -> None:
+    dataset = next(item for item in data_status.DATASETS if item.id == "symbol_meta")
+    with sqlite3.connect(tmp_path / dataset.file) as connection:
+        connection.execute("CREATE TABLE symbol_meta (code TEXT PRIMARY KEY, name TEXT, fetched_at TEXT)")
+        connection.execute("INSERT INTO symbol_meta VALUES (NULL, 'unknown', ?)", [RECENT])
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["status"] == "missing" and entry["unavailable_reason"] == "unreadable"
+    with sqlite3.connect(tmp_path / dataset.file) as connection:
+        connection.execute("INSERT INTO symbol_meta VALUES ('2330', 'TSMC', ?)", [RECENT])
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["status"] == "ok" and entry["rows"] == 2 and entry["symbols"] == 1
