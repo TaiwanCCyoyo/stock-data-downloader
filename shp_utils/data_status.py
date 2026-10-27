@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 LOGGER = logging.getLogger(__name__)
 SCHEMA = "producer-data-status.v1"
 SQLITE_READ_SECONDS = 120
+STABLE_READ_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -62,19 +63,44 @@ def _timestamp(value: str) -> datetime:
     return timestamp.astimezone(UTC)
 
 
+def _leads_index(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    for index in connection.execute(f"PRAGMA index_list({table})"):
+        first = connection.execute(f"PRAGMA index_info({index[1]})").fetchone()
+        if first is not None and first[2] == column:
+            return True
+    return False
+
+
 def _sqlite_stats(path: Path, dataset: Dataset) -> dict[str, Any]:
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-    # This is a once-per-refresh inventory, not an interactive request. The
-    # official-price artifact's full aggregate exceeds 30 seconds on local disk.
+    # This is a once-per-refresh inventory, not an interactive request. One
+    # statement mixing these aggregates reads the whole table (16 GB for official
+    # prices) and exceeded this deadline on a cold cache; grouping by code lets
+    # SQLite answer counts and period bounds from one (code, period) index pass.
     deadline = time.monotonic() + SQLITE_READ_SECONDS
     try:
         connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10_000)
+        connection.execute("BEGIN")  # one snapshot for every statement below
         # Expressions come only from the static definitions above, never user input.
         row = connection.execute(
-            f"SELECT COUNT(*), COUNT(DISTINCT code), MIN({dataset.period}), MAX({dataset.period}), MAX({dataset.updated}) FROM {dataset.table}"
+            f"SELECT TOTAL(n), COUNT(*), MIN(lo), MAX(hi) FROM "
+            f"(SELECT COUNT(*) AS n, MIN({dataset.period}) AS lo, MAX({dataset.period}) AS hi FROM {dataset.table} GROUP BY code)"
         ).fetchone()
         assert row is not None
-        return {"rows": row[0], "symbols": row[1], "data_period": {"from": row[2], "to": row[3]}, "last_updated": row[4]}
+        rows, symbols, first, last = int(row[0]), row[1], row[2], row[3]
+        if dataset.observation_only or last is None:
+            # Small tables; observation time is their only freshness signal.
+            updated = connection.execute(f"SELECT MAX({dataset.updated}) FROM {dataset.table}").fetchone()[0]
+        elif _leads_index(connection, dataset.table, dataset.period):
+            updated = connection.execute(f"SELECT MAX({dataset.updated}) FROM {dataset.table} WHERE {dataset.period} = ?", [last]).fetchone()[0]
+        else:
+            # No period-leading index: seek each code's newest row instead of scanning the table.
+            updated = connection.execute(
+                f"SELECT MAX(t.{dataset.updated}) FROM (SELECT DISTINCT code FROM {dataset.table}) AS c "
+                f"JOIN {dataset.table} AS t ON t.code = c.code AND t.{dataset.period} = ?",
+                [last],
+            ).fetchone()[0]
+        return {"rows": rows, "symbols": symbols, "data_period": {"from": first, "to": last}, "last_updated": updated}
     finally:
         connection.close()
 
@@ -120,6 +146,31 @@ def _fresh(stats: dict[str, Any], dataset: Dataset, now: datetime) -> bool:
     return timedelta(0) <= now.date() - end <= tolerance
 
 
+class ArtifactChanged(ValueError):
+    """The artifact's size or modification time moved while it was being read."""
+
+
+def _stable_stats(source: Path, dataset: Dataset) -> dict[str, Any]:
+    """Read once more if the artifact moved mid-read; a WAL checkpoint by another reader can do that."""
+    for attempt in range(1, STABLE_READ_ATTEMPTS + 1):
+        before = _identity(source)
+        stats = _sqlite_stats(source, dataset) if dataset.table else _parquet_stats(source)
+        if before == _identity(source):
+            return stats
+        LOGGER.info("Data status dataset=%s changed during read attempt %d", dataset.id, attempt)
+    raise ArtifactChanged("artifact changed while gathering status")
+
+
+def _unavailable_reason(exc: Exception) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "absent"
+    if isinstance(exc, ArtifactChanged):
+        return "changed_during_read"
+    if isinstance(exc, sqlite3.OperationalError) and str(exc) == "interrupted":
+        return "read_deadline"
+    return "unreadable"
+
+
 def collect_data_status(data_dir: Path, *, now: datetime | None = None, failed_datasets: set[str] | None = None) -> dict[str, Any]:
     """Read statistics in isolation; missing or unreadable data never look healthy."""
     moment = now or datetime.now(UTC)
@@ -143,17 +194,15 @@ def collect_data_status(data_dir: Path, *, now: datetime | None = None, failed_d
         try:
             if not source.is_file():
                 raise FileNotFoundError(dataset.file)
-            before = _identity(source)
-            stats = _sqlite_stats(source, dataset) if dataset.table else _parquet_stats(source)
-            if before != _identity(source):
-                raise ValueError("artifact changed while gathering status")
+            stats = _stable_stats(source, dataset)
             if stats["rows"]:
                 if stats["symbols"] < 1 or not all(stats["data_period"].values()) or not stats["last_updated"]:
                     raise ValueError("nonempty artifact has incomplete identity metadata")
                 entry["status"] = "ok" if _fresh(stats, dataset, moment) and dataset.id not in failed else "stale"
             entry.update(stats)
         except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
-            LOGGER.warning("Data status unavailable dataset=%s: %s", dataset.id, exc)
+            entry["unavailable_reason"] = _unavailable_reason(exc)
+            LOGGER.warning("Data status unavailable dataset=%s reason=%s: %s", dataset.id, entry["unavailable_reason"], exc)
         entries.append(entry)
         LOGGER.info("Data status dataset=%s state=%s rows=%s seconds=%.3f", dataset.id, entry["status"], entry["rows"], time.monotonic() - started)
     LOGGER.info("Collected data status for %d artifacts", len(entries))

@@ -112,6 +112,7 @@ def test_changed_artifact_is_not_published_as_healthy(tmp_path: Path, monkeypatc
     entry = indexed(tmp_path)[dataset.id]
     assert entry["status"] == "missing"
     assert entry["rows"] is None
+    assert entry["unavailable_reason"] == "changed_during_read"
 
 
 def test_atomic_failure_keeps_previous_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,3 +134,49 @@ def test_successful_publication_is_readable_json(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "data-status.json").read_text(encoding="utf-8")) == payload
     assert payload["schema"] == "producer-data-status.v1"
     assert payload["generated_at"] == NOW.isoformat(timespec="seconds")
+
+
+def test_one_mid_read_change_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = data_status.DATASETS[0]
+    create_sqlite(tmp_path, dataset)
+    original = data_status._sqlite_stats
+    calls = []
+
+    def changing_once(path: Path, definition: data_status.Dataset) -> dict:
+        calls.append(path)
+        stats = original(path, definition)
+        if len(calls) == 1:
+            path.write_bytes(path.read_bytes() + b"changed")
+        return stats
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", changing_once)
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["status"] == "ok" and len(calls) == 2
+    assert "unavailable_reason" not in entry
+
+
+def test_unavailable_entries_name_their_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    create_sqlite(tmp_path, data_status.DATASETS[0])
+
+    def deadline(_path: Path, _definition: data_status.Dataset) -> dict:
+        raise sqlite3.OperationalError("interrupted")
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", deadline)
+    entries = indexed(tmp_path)
+    assert entries["official_daily"]["unavailable_reason"] == "read_deadline"
+    assert entries["official_daily"]["status"] == "missing" and entries["official_daily"]["rows"] is None
+    assert entries["price_daily"]["unavailable_reason"] == "absent"
+
+
+@pytest.mark.parametrize("period_index", [False, True])
+def test_last_updated_observes_the_newest_period(tmp_path: Path, period_index: bool) -> None:
+    dataset = next(item for item in data_status.DATASETS if item.id == "institutional")
+    create_sqlite(tmp_path, dataset)
+    with sqlite3.connect(tmp_path / dataset.file) as connection:
+        if period_index:
+            connection.execute(f"CREATE INDEX by_period ON {dataset.table} ({dataset.period}, code)")
+        connection.execute(f"INSERT INTO {dataset.table} VALUES ('1101', '2012-05-02', '2026-10-23T23:00:00+00:00')")
+    entry = indexed(tmp_path)[dataset.id]
+    assert entry["last_updated"] == RECENT
+    assert entry["rows"] == 3 and entry["symbols"] == 3
+    assert entry["data_period"] == {"from": "2012-05-02", "to": "2026-10-23"}
