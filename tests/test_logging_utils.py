@@ -3,10 +3,21 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from shp_utils.logging_utils import LAUNCH_EPOCH_ENV, StepClock, dated_log_path, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
+from shp_utils.logging_utils import (
+    LAUNCH_EPOCH_ENV,
+    TASK_LIMIT_ENV,
+    StepClock,
+    dated_log_path,
+    launch_epoch_from_env,
+    log_startup,
+    setup_logging,
+    start_heartbeat,
+    task_limit_from_env,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +107,7 @@ def test_log_startup_records_pid_and_commit(caplog: pytest.LogCaptureFixture):
     assert "git_commit=" in text
 
 
-def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: float | None) -> logging.LogRecord:
+def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: Any) -> logging.LogRecord:
     logger = logging.getLogger(logger_name)
     with caplog.at_level(logging.INFO, logger=logger_name):
         stop = start_heartbeat(logger, **{"interval_seconds": 0.01, **kwargs})
@@ -149,3 +160,52 @@ def test_heartbeat_warns_immediately_when_already_past_the_threshold_at_start(ca
     record = _first_heartbeat("past_at_start", caplog, warn_after_seconds=2.5 * 3600, launch_epoch=time.time() - 2.9 * 3600, interval_seconds=3600.0)
 
     assert record.levelno == logging.WARNING
+
+
+def test_heartbeat_reports_an_orphan_once_past_the_task_limit(caplog: pytest.LogCaptureFixture):
+    logger = logging.getLogger("orphan_test")
+    with caplog.at_level(logging.INFO, logger="orphan_test"):
+        stop = start_heartbeat(
+            logger, interval_seconds=0.01, launch_epoch=time.time() - 3 * 3600 - 60, task_limit_seconds=3 * 3600, current_step=lambda: "步驟 10"
+        )
+        deadline = time.monotonic() + 5
+        while sum(r.levelno == logging.INFO for r in caplog.records) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        stop.set()
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(errors) == 1
+    message = errors[0].getMessage()
+    assert message.startswith("task time limit passed: since_launch=10860s limit=10800s; Task Scheduler has likely ended the task")
+    assert "(orphan)" in message
+    assert "current_step=步驟 10" in message
+
+
+def test_heartbeat_does_not_report_before_the_task_limit(caplog: pytest.LogCaptureFixture):
+    record = _first_heartbeat("under_limit", caplog, launch_epoch=time.time() - 3500, task_limit_seconds=3600.0)
+
+    assert record.levelno == logging.INFO
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+
+
+def test_heartbeat_ignores_the_task_limit_without_a_launch_time(caplog: pytest.LogCaptureFixture):
+    _first_heartbeat("limit_no_launch", caplog, task_limit_seconds=0.0001)
+
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("10800", 10800.0), ("", None), ("abc", None), ("0", None), ("-5", None)])
+def test_task_limit_from_env(monkeypatch: pytest.MonkeyPatch, raw: str, expected: float | None):
+    monkeypatch.setenv(TASK_LIMIT_ENV, raw)
+
+    assert task_limit_from_env() == expected
+
+
+def test_step_clock_exposes_the_step_in_progress():
+    clock = StepClock(logging.getLogger("step_current"))
+
+    assert clock.current is None
+    clock.begin("步驟 4")
+    assert clock.current == "步驟 4"
+    clock.finish()
+    assert clock.current is None

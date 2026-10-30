@@ -5,6 +5,7 @@ Run with: uv run pytest test_official_api.py -v
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -335,3 +336,21 @@ def test_max_retry_sleep_bounds_the_delay_including_its_jitter():
     delays = [official_api._retry_delay(None, attempt=attempt, retry_sleep=15.0, max_retry_sleep=300.0) for attempt in range(1, 12) for _ in range(50)]
     assert max(delays) <= 300.0
     assert max(delays) > 250.0, "the cap should still be reachable, not merely never approached"
+
+
+def test_failed_attempt_log_includes_its_elapsed_seconds(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    attempts = {"count": 0}
+
+    def fake_get(url: str, params: Any = None, timeout: Any = None, headers: Any = None) -> _FakeResponse:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return _FakeResponse(status_code=500, text="server error")
+        return _FakeResponse(json_body=[{"ok": True}])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    with caplog.at_level("WARNING"):
+        fetch_json_with_retry("http://example.test/data", retries=2, retry_sleep=0.01)
+
+    assert re.search(r"fetch attempt 1/3 for http://example.test/data failed \(.*\) after \d+\.\ds; retrying in ", caplog.text)

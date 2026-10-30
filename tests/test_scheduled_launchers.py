@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,8 @@ LAUNCHERS = (
     ("run_daily_scheduled", "run scripts/run_daily.py"),
     ("backfill_official_history_scheduled", "run scripts/backfill_official_history.py --max-seconds 82800"),
 )
+# Task Scheduler ExecutionTimeLimit per launcher (setup_scheduled_tasks.ps1), exported for Python's orphan check.
+TASK_LIMIT_SECONDS = {"run_daily_scheduled": 3 * 3600, "backfill_official_history_scheduled": 23 * 3600 + 30 * 60}
 
 
 @pytest.mark.parametrize(("launcher", "expected_arguments"), LAUNCHERS)
@@ -37,7 +40,11 @@ def test_launchers_use_repository_root_and_propagate_exit_code(
     # fall through to the real downloader installed on the machine's PATH.
     for directory in (repository, cron, unrelated):
         (directory / "uv.cmd").write_text(
-            f"@echo off\n> invocation.txt echo %CD%\n>> invocation.txt echo %*\n>> invocation.txt echo %STOCK_PROJECT_LAUNCH_EPOCH%\nexit /b {exit_code}\n",
+            (
+                f"@echo off\n> invocation.txt echo %CD%\n>> invocation.txt echo %*\n"
+                f">> invocation.txt echo %STOCK_PROJECT_LAUNCH_EPOCH%\n>> invocation.txt echo %STOCK_PROJECT_TASK_LIMIT_SECONDS%\n"
+                f"exit /b {exit_code}\n"
+            ),
             encoding="ascii",
         )
     for extension in ("cmd", "vbs"):
@@ -66,13 +73,15 @@ def test_launchers_use_repository_root_and_propagate_exit_code(
     assert lines[1] == expected_arguments
     # Python's heartbeat measures the scheduler limit from this launch time, not from its own start.
     assert abs(int(lines[2]) - time.time()) < 120
+    assert int(lines[3]) == TASK_LIMIT_SECONDS[launcher]
     # The wrapper trace brackets the run so a killed or stalled launch is visible in logs/.
     day = datetime.date.today().strftime("%Y%m%d")
     # CMD dates use the active console code page, which need not match mbcs.
     # The wrapper's protocol markers are ASCII under either code page.
     trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_bytes()
     assert b"wrapper start" in trace
-    assert f"wrapper end exit_code={exit_code}".encode("ascii") in trace
+    # The end line records the run time and whether it outlived the scheduler limit.
+    assert re.search(rf"wrapper end exit_code={exit_code} elapsed_s=\d+ over_limit=0".encode("ascii"), trace)
 
 
 @pytest.mark.parametrize("missing_task", [False, True])

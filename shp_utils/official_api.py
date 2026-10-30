@@ -192,6 +192,7 @@ def _fetch_with_retry(
     for attempt in range(1, attempts + 1):
         response: requests.Response | None = None
         status_code: int | None = None
+        attempt_started = time.monotonic()
         try:
             request_kwargs: dict[str, Any] = {
                 "params": params,
@@ -229,11 +230,12 @@ def _fetch_with_retry(
                 max_retry_sleep=max_retry_sleep,
             )
             logger.warning(
-                "fetch attempt %d/%d for %s failed (%s); retrying in %.1fs",
+                "fetch attempt %d/%d for %s failed (%s) after %.1fs; retrying in %.1fs",
                 attempt,
                 attempts,
                 url,
                 exc,
+                time.monotonic() - attempt_started,
                 delay,
             )
             time.sleep(delay)
