@@ -338,7 +338,12 @@ def run_backfill(
         init_history_raw_ranges_table(db_path)
         twse_units = build_twse_day_crawl_units(twse_dates or [])
         units = twse_units + build_tpex_crawl_units(tpex_dates or [])
-        month_units = build_crawl_units(codes, start_year_month, end_year_month, newest_first=newest_first, listing_months=listing_months)
+        keep_units = load_unfinished_before_listing(db_path, listing_months) if listing_months else set()
+        if keep_units:
+            logger.info("auto plan: kept %d unfinished checkpoint unit(s) before their listing month", len(keep_units))
+        month_units = build_crawl_units(
+            codes, start_year_month, end_year_month, newest_first=newest_first, listing_months=listing_months, keep_units=keep_units
+        )
         if listing_months is not None:
             planned_counts = Counter(unit.code for unit in build_crawl_units(codes, start_year_month, end_year_month))
             kept_counts = Counter(unit.code for unit in month_units)
@@ -465,34 +470,66 @@ def build_crawl_units(
     *,
     newest_first: bool = False,
     listing_months: dict[str, str] | None = None,
+    keep_units: set[tuple[str, str]] | None = None,
 ) -> list[CrawlUnit]:
     """Per-code monthly TWSE units.
 
-    ``listing_months`` maps a code to the ``YYYY-MM`` of its listing date; months before it are
-    not planned for that code, which did not exist yet. Codes absent from the mapping keep every
-    month.
+    ``listing_months`` maps a code to the ``YYYY-MM`` of its TWSE listing date; months before it
+    are not planned for that code, which was not on TWSE yet. ``keep_units`` holds
+    ``(code, period)`` pairs planned even before that floor: checkpoints the crawler left
+    unfinished there, which a later listing date must not strand. Codes absent from the
+    mapping keep every month.
     """
     months = [ym for ym in month_range(start_year_month, end_year_month) if ym >= EARLIEST_SUPPORTED_YEAR_MONTH]
     floors = listing_months or {}
+    keep = keep_units or set()
+
+    def planned(code: str, month: str) -> bool:
+        return month >= floors.get(code, "") or (code, month) in keep
+
     if newest_first:
         # Month-major (not code-major) so one unchanging command naturally finishes
         # every code's newest month before it touches an older one.
-        return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for month in reversed(months) for code in codes if month >= floors.get(code, "")]
-    return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for code in codes for month in months if month >= floors.get(code, "")]
+        return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for month in reversed(months) for code in codes if planned(code, month)]
+    return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for code in codes for month in months if planned(code, month)]
+
+
+def load_unfinished_before_listing(db_path: Path, listing_months: dict[str, str]) -> set[tuple[str, str]]:
+    """``(code, period)`` TWSE checkpoints before each code's listing month that are not settled.
+
+    Settled (``ok``/``empty``) units would be skipped anyway; anything else (``partial``,
+    ``error``) is history the crawler already found and must keep retrying.
+    """
+    if not listing_months:
+        return set()
+    unfinished: set[tuple[str, str]] = set()
+    with sqlite3.connect(db_path) as conn:
+        for code, floor in listing_months.items():
+            rows = conn.execute(
+                "SELECT period FROM official_history_raw_ranges WHERE market = ? AND code = ? AND period < ? AND status NOT IN ('ok', 'empty')",
+                (MARKET_TWSE, code, floor),
+            ).fetchall()
+            unfinished.update((code, period) for (period,) in rows)
+    return unfinished
 
 
 def load_listing_months(symbol_meta_path: Path) -> dict[str, str]:
-    """Code -> ``YYYY-MM`` of its ``listed_date``, read-only from symbol_meta.sqlite.
+    """Code -> ``YYYY-MM`` of its TWSE ``listed_date``, read-only from symbol_meta.sqlite.
 
-    Codes with a missing or unparseable listed_date are left out, as is everything when the
-    database or table is absent or unreadable, so the caller falls back to planning every month.
+    Only TWSE listings (market ``TWSE`` or a ``上市`` board) give a floor: a code currently on
+    TPEx, or one that moved boards, may have TWSE history that its present listed_date does not
+    describe. Codes with a missing or unparseable listed_date are left out, as is everything
+    when the database or table is absent or unreadable, so the caller falls back to planning
+    every month.
     """
     if not symbol_meta_path.is_file():
         return {}
     try:
         conn = sqlite3.connect(f"{symbol_meta_path.resolve().as_uri()}?mode=ro", uri=True)
         try:
-            rows = conn.execute("SELECT code, listed_date FROM symbol_meta WHERE listed_date IS NOT NULL").fetchall()
+            rows = conn.execute(
+                "SELECT code, listed_date FROM symbol_meta WHERE listed_date IS NOT NULL AND (market = 'TWSE' OR market LIKE '上市%')"
+            ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:

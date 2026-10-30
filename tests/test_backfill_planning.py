@@ -283,10 +283,56 @@ def test_planning_matches_the_original_on_a_longer_history(tmp_path: Path):
     assert load_twse_backfill_universe(path) == _reference_load_twse_backfill_universe(path)
 
 
-def _symbol_meta(path: Path, rows: list[tuple[str, str | None]]) -> None:
+def _symbol_meta(path: Path, rows: list[tuple[str, str | None]], market: str = "上市") -> None:
     with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE symbol_meta (code TEXT PRIMARY KEY, name TEXT, listed_date TEXT, market TEXT NOT NULL)")
-        conn.executemany("INSERT INTO symbol_meta (code, listed_date, market) VALUES (?, ?, 'TWSE')", rows)
+        conn.execute("CREATE TABLE IF NOT EXISTS symbol_meta (code TEXT PRIMARY KEY, name TEXT, listed_date TEXT, market TEXT NOT NULL)")
+        conn.executemany("INSERT INTO symbol_meta (code, listed_date, market) VALUES (?, ?, ?)", [(*row, market) for row in rows])
+
+
+def test_listing_months_floor_only_twse_listings(tmp_path: Path):
+    path = tmp_path / "symbol_meta.sqlite"
+    _symbol_meta(path, [("009831", "2026-10-29")])
+    _symbol_meta(path, [("6488", "2020-01-02")], market="上櫃")
+    _symbol_meta(path, [("6806", "2021-05-03")], market="上市臺灣創新板")
+    _symbol_meta(path, [("2330", "1994-09-05")], market="TWSE")
+
+    assert load_listing_months(path) == {"009831": "2026-10", "6806": "2021-05", "2330": "1994-09"}
+
+
+@pytest.mark.parametrize("status", ["partial", "error"])
+def test_unfinished_history_before_the_listing_month_is_still_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str
+):
+    # 2015-06 was already crawled but left unfinished; today's listed_date says 2020-01.
+    db_path = tmp_path / "official_daily.sqlite"
+    init_history_raw_ranges_table(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO official_history_raw_ranges (market, code, period, fetched_at, status, row_count) VALUES ('TWSE', '1234', ?, 't', ?, 0)",
+            [("2015-06", status), ("2015-05", "ok"), ("2015-07", "empty")],
+        )
+    fetched: list[tuple[str, str]] = []
+
+    def fake_fetch(code: str, period: str, **_kwargs: Any) -> dict[str, Any]:
+        fetched.append((code, period))
+        return {"stat": "OK", "fields": [], "data": []}
+
+    monkeypatch.setattr(backfill, "fetch_twse_symbol_month", fake_fetch)
+    monkeypatch.setattr(backfill.time, "sleep", lambda _s: None)
+
+    with caplog.at_level(logging.INFO):
+        run_backfill(
+            codes=["1234"],
+            start_year_month="2015-04",
+            end_year_month="2020-01",
+            db_path=db_path,
+            throttle_seconds=0,
+            today=date(2026, 11, 1),
+            listing_months={"1234": "2020-01"},
+        )
+
+    assert sorted(fetched) == [("1234", "2015-06"), ("1234", "2020-01")]
+    assert "auto plan: kept 1 unfinished checkpoint unit(s) before their listing month" in caplog.text
 
 
 def test_listing_months_reads_valid_dates_and_ignores_the_rest(tmp_path: Path):
