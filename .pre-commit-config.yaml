@@ -1,3 +1,8 @@
+# nodeenv's default resolves the newest Node release, which can be a
+# prerelease it cannot parse (27.0.0-alpha on 2026-10-30); pin to LTS.
+default_language_version:
+    node: lts
+
 repos:
     # Basic out-of-the-box checks.
     - repo: https://github.com/pre-commit/pre-commit-hooks
