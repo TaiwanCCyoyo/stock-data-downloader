@@ -4,6 +4,7 @@ Schema and dates exercise validation; rows are not acquired market observations.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -550,3 +551,16 @@ def test_run_fetch_without_tpex_date_does_not_request_supplement(tmp_path: Path,
 
     monkeypatch.setattr(official, "fetch_twse_market_day", unexpected_request)
     assert run_fetch(db_path=tmp_path / "official.sqlite") == {"TWSE": 0 if missing_twse else 2, "TPEx": 0}
+
+
+def test_bulk_fetch_log_splits_http_and_write_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    monkeypatch.setattr(official, "fetch_twse_bulk", lambda **_kwargs: TWSE_BULK_FIXTURE)
+    monkeypatch.setattr(official, "fetch_tpex_bulk", lambda **_kwargs: TPEX_BULK_FIXTURE)
+    monkeypatch.setattr(official, "fetch_twse_market_day", lambda *_args, **_kwargs: {"stat": "很抱歉，沒有符合條件的資料!"})
+
+    with caplog.at_level("INFO"):
+        run_fetch(db_path=tmp_path / "official_daily.sqlite")
+
+    lines = [r.getMessage() for r in caplog.records if "official daily bulk:" in r.getMessage()]
+    assert len(lines) == 2
+    assert all(re.search(r" http_elapsed=\d+\.\ds write_elapsed=\d+\.\ds$", line) for line in lines)

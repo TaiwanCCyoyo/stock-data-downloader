@@ -475,3 +475,31 @@ def test_read_existing_mapping_count_reads_json_and_json5(tmp_path: Path):
     assert download_stock.read_existing_mapping_count(strict) == 2
     assert download_stock.read_existing_mapping_count(relaxed) == 2
     assert download_stock.read_existing_mapping_count(tmp_path / "missing.json5") == 0
+
+
+@pytest.mark.parametrize(
+    ("kbars_error", "kbars_response", "expected"),
+    [
+        (RuntimeError("read timeout"), {}, {"timeout": 1, "no_data": 0, "error": 0}),
+        (RuntimeError("boom"), {}, {"timeout": 0, "no_data": 0, "error": 1}),
+        (None, {}, {"timeout": 0, "no_data": 1, "error": 0}),
+    ],
+    ids=["timeout", "error", "no_data"],
+)
+def test_download_summary_breaks_skipped_symbols_down_by_reason(
+    isolated_download_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kbars_error: Exception | None,
+    kbars_response: dict,
+    expected: dict[str, int],
+):
+    fake_api = FakeApi(codes=["9001"], kbars_error=kbars_error, kbars_response=kbars_response)
+    _install_fake_api(monkeypatch, fake_api)
+
+    with caplog.at_level(logging.INFO, logger=download_stock.__name__):
+        assert download_stock.main(codes=["9001"]) == 0
+
+    summary = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("download_summary:"))
+    assert "skipped_failed=1" in summary
+    assert f"skip_reasons={expected}" in summary

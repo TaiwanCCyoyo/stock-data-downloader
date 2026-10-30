@@ -325,6 +325,11 @@ def update_stock_symbol_mapping(api: sj.Shioaji) -> None:
     logger.info(f"對照表已經儲存至 {config.STOCK_SYMBOL_MAPPING} ({len(stock_symbol_mapping)} 筆)")
 
 
+def _is_timeout_error(error: BaseException) -> bool:
+    """Whether a failed kbars request timed out, judged from the exception type or its message."""
+    return isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower() or "timed out" in str(error).lower() or "timeout" in str(error).lower()
+
+
 def main(codes: list[str] | None = None, start: str | None = None, end: str | None = None) -> int:
     """Download minute bars for the requested (or all) contracts.
 
@@ -391,6 +396,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
         downloadable = True
         consecutive_failures = 0
         skipped_failed_count = 0
+        skip_reasons = {"timeout": 0, "no_data": 0, "error": 0}
         request_error_count = 0
         pacer = RequestPacer()
         last_usage_check = 0.0
@@ -454,6 +460,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
             stock_get_start = datetime.datetime.now()
             chunk_dfs = []
             chunk_raised = False
+            chunk_timed_out = False
             for chunk_start, chunk_end in _chunk_date_ranges(start_date_str, request_end_str):
                 try:
                     pacer.wait()
@@ -463,6 +470,7 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
                         chunk_dfs.append(chunk_df)
                 except Exception as e:
                     chunk_raised = True
+                    chunk_timed_out = chunk_timed_out or _is_timeout_error(e)
                     request_error_count += 1
                     logger.error(f"取得失敗 ({chunk_start} ~ {chunk_end}): {e}")
             df_new = pd.concat(chunk_dfs, ignore_index=True) if chunk_dfs else pd.DataFrame()
@@ -503,6 +511,12 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
 
             if not success:
                 skipped_failed_count += 1
+                if not chunk_raised:
+                    skip_reasons["no_data"] += 1
+                elif chunk_timed_out:
+                    skip_reasons["timeout"] += 1
+                else:
+                    skip_reasons["error"] += 1
                 logger.warning(f"跳過{contract.name} ({contract.code}) 因為從 {start_date_str} 到 {request_end_str} 的資料取得失敗")
                 continue
 
@@ -573,10 +587,11 @@ def main(codes: list[str] | None = None, start: str | None = None, end: str | No
         end_time = datetime.datetime.now()
         logger.info(f"結束: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(
-            "download_summary: contracts=%d updated=%d skipped_failed=%d request_errors=%d elapsed=%.0fs",
+            "download_summary: contracts=%d updated=%d skipped_failed=%d skip_reasons=%s request_errors=%d elapsed=%.0fs",
             len(contract_list),
             updated_symbol_count,
             skipped_failed_count,
+            skip_reasons,
             request_error_count,
             (end_time - start_time).total_seconds(),
         )
