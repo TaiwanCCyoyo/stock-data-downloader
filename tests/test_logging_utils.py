@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -106,7 +107,7 @@ def test_log_startup_records_pid_and_commit(caplog: pytest.LogCaptureFixture):
     assert "git_commit=" in text
 
 
-def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: float | None) -> logging.LogRecord:
+def _first_heartbeat(logger_name: str, caplog: pytest.LogCaptureFixture, **kwargs: Any) -> logging.LogRecord:
     logger = logging.getLogger(logger_name)
     with caplog.at_level(logging.INFO, logger=logger_name):
         stop = start_heartbeat(logger, **{"interval_seconds": 0.01, **kwargs})

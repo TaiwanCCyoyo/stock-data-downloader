@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -122,7 +123,7 @@ class RunLock:
 
 def _try_os_lock(fd: int) -> bool:
     os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         try:
@@ -130,7 +131,7 @@ def _try_os_lock(fd: int) -> bool:
         except OSError:
             return False
         return True
-    import fcntl
+    import fcntl  # sys.platform narrows this branch for type checkers on Windows
 
     try:
         fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, _LOCK_OFFSET)

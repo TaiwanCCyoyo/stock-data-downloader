@@ -15,6 +15,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import json5
 import pandas as pd
@@ -292,9 +293,10 @@ def read_existing_mapping_count(path: str | Path) -> int:
         try:
             # The mapping is written with json.dump, so the stdlib parser reads it in
             # milliseconds; json5 took ~7s on the 53k-entry file (2026-10-22).
-            return len(json.loads(text))
+            mapping: Any = json.loads(text)
         except ValueError:
-            return len(json5.loads(text))
+            mapping = json5.loads(text)
+        return len(mapping)
     except Exception as e:
         logger.warning(f"無法讀取既有對照表 {path}，這次不做筆數比對: {e}")
         return 0
