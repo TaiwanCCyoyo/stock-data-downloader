@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ RUN_DAILY_LOCK_NAME = ".run_daily.lock"
 
 
 class RunAlreadyActiveError(RuntimeError):
-    """Raised when the pid recorded in a run lock still names a live process."""
+    """Raised when another process holds the run lock."""
 
 
 def pid_is_running(pid: int) -> bool:
@@ -72,89 +72,86 @@ def _windows_pid_is_running(pid: int) -> bool:
         close_handle(handle)
 
 
-def process_started_at(pid: int) -> datetime | None:
-    """Creation time (UTC) of a live process, or None when it cannot be read (or off Windows)."""
-    if os.name != "nt" or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return None
-    import ctypes
-    from ctypes import wintypes
+# The OS lock covers one byte far past the JSON record, so readers of the record are never
+# blocked by it; the OS drops it when the holding process exits, however it exits.
+_LOCK_OFFSET = 1 << 20
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    open_process = kernel32.OpenProcess
-    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    open_process.restype = wintypes.HANDLE
-    get_process_times = kernel32.GetProcessTimes
-    get_process_times.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-    get_process_times.restype = wintypes.BOOL
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = [wintypes.HANDLE]
-    close_handle.restype = wintypes.BOOL
 
-    handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return None
+class RunLock:
+    """An acquired run lock; keep it until the run ends, then pass it to ``release_run_lock``."""
+
+    def __init__(self, path: Path, fd: int) -> None:
+        self.path = path
+        self.fd = fd
+
+
+def _try_os_lock(fd: int) -> bool:
+    os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
     try:
-        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
-        if not get_process_times(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)):
-            return None
-        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime  # 100ns since 1601-01-01 UTC
-        return datetime(1601, 1, 1, tzinfo=UTC) + timedelta(microseconds=ticks // 10)
-    finally:
-        close_handle(handle)
-
-
-def _pid_reused(pid: int, recorded_started_at: object) -> bool:
-    """True when the live ``pid`` was created after the lock was written, so it is not the locking run.
-
-    Windows reuses pids quickly; without this a lock left by a crash could name an unrelated
-    process the next day and keep every later run from starting.
-    """
-    if not isinstance(recorded_started_at, str):
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, _LOCK_OFFSET)
+    except OSError:
         return False
+    return True
+
+
+def _read_record(path: Path) -> dict[str, object]:
     try:
-        recorded = datetime.fromisoformat(recorded_started_at)
-    except ValueError:
-        return False
-    created = process_started_at(pid)
-    # Lock stamps have one-second resolution and are written just after start; allow slack.
-    return created is not None and created > recorded + timedelta(minutes=1)
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
 
 
-def acquire_run_lock(lock_path: Path, *, git_commit: str, label: str = "run_daily") -> None:
-    """Write ``{pid, started_at, git_commit}`` to ``lock_path``.
+def acquire_run_lock(lock_path: Path, *, git_commit: str, label: str = "run_daily") -> RunLock:
+    """Take the exclusive OS lock on ``lock_path`` and record ``{pid, started_at, git_commit}``.
 
-    A lock whose pid is alive raises ``RunAlreadyActiveError`` and is left untouched. A lock
-    whose pid is gone is logged at WARNING (the previous run died or was orphaned past its
-    end) and replaced.
+    Two runs starting together cannot both pass: the OS lock is atomic, and a crashed or
+    killed holder releases it with its process, so a pid left in the file never blocks a
+    later run (even when Windows has reused that pid). A held lock raises
+    ``RunAlreadyActiveError``; a record left by a run that did not finish is logged at WARNING.
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    if lock_path.is_file():
-        existing_pid = None
-        existing_started_at = None
-        try:
-            existing = json.loads(lock_path.read_text(encoding="utf-8"))
-            existing_pid, existing_started_at = existing.get("pid"), existing.get("started_at")
-        except (json.JSONDecodeError, OSError, ValueError, AttributeError):
-            pass
-        if existing_pid is not None and pid_is_running(existing_pid) and _pid_reused(existing_pid, existing_started_at):
-            logger.warning("%s lock pid=%s now names a process started after the lock (%s); treating it as stale", label, existing_pid, existing_started_at)
-        elif existing_pid is not None and pid_is_running(existing_pid):
-            raise RunAlreadyActiveError(
-                f"another {label} appears to be running (pid={existing_pid}, lock={lock_path}); "
-                f"if no such run is actually alive (e.g. the pid was reused by an unrelated process), delete this lock file and re-run"
-            )
-        logger.warning("previous %s did not finish cleanly (stale lock pid=%s, lock=%s)", label, existing_pid, lock_path)
-    lock_path.write_text(
-        json.dumps({"pid": os.getpid(), "started_at": datetime.now(UTC).isoformat(timespec="seconds"), "git_commit": git_commit}),
-        encoding="utf-8",
-    )
-
-
-def release_run_lock(lock_path: Path) -> None:
-    """Remove the lock only when it still names this process (never another run's)."""
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
     try:
-        recorded = json.loads(lock_path.read_text(encoding="utf-8")).get("pid")
-    except (json.JSONDecodeError, OSError, ValueError, AttributeError):
-        recorded = None
-    if recorded == os.getpid():
-        lock_path.unlink(missing_ok=True)
+        if not _try_os_lock(fd):
+            holder = _read_record(lock_path).get("pid")
+            raise RunAlreadyActiveError(f"another {label} is running (pid={holder}, lock={lock_path})")
+        previous = _read_record(lock_path)
+        if previous:
+            logger.warning("previous %s did not finish cleanly (stale lock pid=%s, lock=%s)", label, previous.get("pid"), lock_path)
+        record = json.dumps({"pid": os.getpid(), "started_at": datetime.now(UTC).isoformat(timespec="seconds"), "git_commit": git_commit}).encode("utf-8")
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, record)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        raise
+    return RunLock(lock_path, fd)
+
+
+def release_run_lock(lock: RunLock) -> None:
+    """Remove this run's record, then drop the OS lock by closing the file."""
+    try:
+        os.lseek(lock.fd, 0, os.SEEK_SET)
+        os.ftruncate(lock.fd, 0)
+    except OSError as error:
+        logger.warning("could not clear run lock record %s: %s", lock.path, error)
+    finally:
+        os.close(lock.fd)
+    try:
+        if not _read_record(lock.path):
+            lock.path.unlink(missing_ok=True)
+    except OSError:
+        # Another run took the lock between close and unlink; its file stays.
+        pass

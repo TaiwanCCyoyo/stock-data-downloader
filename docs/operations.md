@@ -137,8 +137,11 @@ runs and removes it on a normal end:
 
 A consumer can treat either file whose `pid` names a live process as "the producer is
 writing". A file whose process is gone is stale (an earlier run died) and is not a
-writer; the next run logs a warning and replaces it. A second `run_daily.py` refuses to
-start (exit 1) while the recorded pid is alive. The files are advisory only: they do not
+writer; the next run logs a warning and replaces it. `run_daily.py` also holds an
+exclusive OS byte-range lock on its file (one byte at offset 1 MiB, past the JSON, so
+readers are never blocked): a second `run_daily.py` refuses to start (exit 1) while it is
+held, two runs starting together cannot both pass, and a crashed run releases it with its
+process, so a recorded pid that Windows later reuses never blocks a run. The files do not
 stop SQLite readers, and `StockProject-*` task state remains the primary signal.
 
 Task Scheduler's `ExecutionTimeLimit` ends only `wscript.exe`; the `cmd`/`uv`/Python chain

@@ -19,6 +19,8 @@ import pyarrow.parquet as pq
 import pytest
 import run_daily
 
+from shp_utils.process_lock import acquire_run_lock, release_run_lock
+
 
 @pytest.fixture(autouse=True)
 def _isolated_run_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -543,14 +545,16 @@ def test_the_run_lock_is_removed_when_the_run_dies_with_an_exception(monkeypatch
 def test_a_live_run_lock_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
     call_order: list[str] = []
     _patch_all_steps(monkeypatch, call_order)
-    _isolated_run_lock.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    held = acquire_run_lock(_isolated_run_lock, git_commit="other")
+    try:
+        with caplog.at_level("ERROR"):
+            assert run_daily.main() == 1
 
-    with caplog.at_level("ERROR"):
-        assert run_daily.main() == 1
-
-    assert call_order == []
-    assert "run_daily not started: another run_daily appears to be running" in caplog.text
-    assert _isolated_run_lock.exists(), "the other run's lock must not be removed"
+        assert call_order == []
+        assert "run_daily not started: another run_daily is running" in caplog.text
+        assert json.loads(_isolated_run_lock.read_text(encoding="utf-8"))["git_commit"] == "other", "the other run's lock must not be touched"
+    finally:
+        release_run_lock(held)
 
 
 def test_a_stale_run_lock_is_replaced_and_the_run_proceeds(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):

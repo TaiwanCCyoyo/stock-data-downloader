@@ -143,14 +143,14 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     """
     setup_logging("run_daily.log")
     try:
-        acquire_run_lock(DEFAULT_LOCK_PATH, git_commit=git_commit())
+        run_lock = acquire_run_lock(DEFAULT_LOCK_PATH, git_commit=git_commit())
     except RunAlreadyActiveError as error:
         logger.error("run_daily not started: %s", error)
         return 1
     try:
         return _run_steps(codes, backup_dir, archive)
     finally:
-        release_run_lock(DEFAULT_LOCK_PATH)
+        release_run_lock(run_lock)
 
 
 def _run_steps(codes: list[str] | None, backup_dir: str | None, archive: bool) -> int:
