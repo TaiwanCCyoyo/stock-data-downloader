@@ -127,22 +127,37 @@ Get-ScheduledTask -TaskName StockProject-* | Get-ScheduledTaskInfo
 
 ### Writer lock files
 
-Each long-running writer leaves an advisory JSON marker in the data directory while it
-runs and removes it on a normal end:
+Each long-running writer keeps an advisory JSON marker in the data directory while it runs:
 
-| File                    | Writer                              | Content                                          |
-| ----------------------- | ----------------------------------- | ------------------------------------------------ |
-| `.run_daily.lock`       | `scripts/run_daily.py`              | `{"pid", "started_at", "git_commit"}`            |
-| `.official_backfill.lock` | `scripts/backfill_official_history.py` | `{"pid", "started_at"}`                       |
+| File                      | Writer                                 | Content while running                 | After a normal end |
+| ------------------------- | -------------------------------------- | ------------------------------------- | ------------------ |
+| `.run_daily.lock`         | `scripts/run_daily.py`                 | `{"pid", "started_at", "git_commit"}` | file kept, empty   |
+| `.official_backfill.lock` | `scripts/backfill_official_history.py` | `{"pid", "started_at"}`               | file removed       |
 
 A consumer can treat either file whose `pid` names a live process as "the producer is
-writing". A file whose process is gone is stale (an earlier run died) and is not a
-writer; the next run logs a warning and replaces it. `run_daily.py` also holds an
-exclusive OS byte-range lock on its file (one byte at offset 1 MiB, past the JSON, so
-readers are never blocked): a second `run_daily.py` refuses to start (exit 1) while it is
-held, two runs starting together cannot both pass, and a crashed run releases it with its
-process, so a recorded pid that Windows later reuses never blocks a run. The files do not
-stop SQLite readers, and `StockProject-*` task state remains the primary signal.
+writing"; an empty or missing file means no run. A record whose process is gone is stale (an
+earlier run died) and is not a writer; the next run logs a warning and replaces it.
+
+`run_daily.py` additionally holds an exclusive OS byte-range lock on its file for the whole
+run (one byte at offset 1 MiB, past the JSON, so readers are never blocked; `msvcrt` on
+Windows, `fcntl` record locks elsewhere, read only through the holding descriptor because
+closing any descriptor of the file drops a POSIX record lock):
+
+- A second `run_daily.py` refuses to start (exit 1) while it is held, and two runs starting
+  together cannot both pass.
+- A crashed or killed run releases it with its process, so a pid left in the record never
+  blocks a later run. A record found under a free lock whose live pid predates its
+  `started_at` is a writer that does not take the OS lock (a version from before it) and is
+  refused; a live pid created after `started_at` is a reused pid and treated as stale.
+- The run clears its record before closing and keeps the file, so it never deletes a file a
+  new run has just locked.
+- On Windows the run puts itself in a kill-on-close job object right after taking the lock,
+  so child processes it starts (such as the step 2 conversion pool) end when it ends, however
+  it ends. POSIX has no equivalent here: there the lock covers the parent process only.
+
+The files do not stop SQLite readers, and `StockProject-*` task state remains the primary
+signal. Deploy a lock-aware version only while no older `run_daily.py` is running: versions
+before `.run_daily.lock` leave no marker at all, so nothing can detect them.
 
 Task Scheduler's `ExecutionTimeLimit` ends only `wscript.exe`; the `cmd`/`uv`/Python chain
 can keep running as an orphan (2026-10-29: 34 minutes past the 3h limit). The launchers

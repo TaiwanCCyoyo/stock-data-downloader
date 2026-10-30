@@ -27,6 +27,8 @@ def _isolated_run_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Keep every test's run lock out of the real data directory."""
     lock = tmp_path / ".run_daily.lock"
     monkeypatch.setattr(run_daily, "DEFAULT_LOCK_PATH", lock)
+    # Never put the test process itself in a kill-on-close job.
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
     return lock
 
 
@@ -525,7 +527,7 @@ def test_the_run_lock_exists_during_the_run_and_is_removed_after(monkeypatch: py
 
     assert seen[0]["pid"] == os.getpid()
     assert {"started_at", "git_commit"} <= set(seen[0])
-    assert not _isolated_run_lock.exists()
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"
 
 
 def test_the_run_lock_is_removed_when_the_run_dies_with_an_exception(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path):
@@ -539,7 +541,7 @@ def test_the_run_lock_is_removed_when_the_run_dies_with_an_exception(monkeypatch
     with pytest.raises(KeyboardInterrupt):
         run_daily.main()
 
-    assert not _isolated_run_lock.exists()
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"
 
 
 def test_a_live_run_lock_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
@@ -569,4 +571,4 @@ def test_a_stale_run_lock_is_replaced_and_the_run_proceeds(monkeypatch: pytest.M
 
     assert f"previous run_daily did not finish cleanly (stale lock pid={dead.pid}" in caplog.text
     assert "backup" in call_order
-    assert not _isolated_run_lock.exists()
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"

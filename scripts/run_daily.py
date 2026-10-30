@@ -63,7 +63,7 @@ from config import config
 from shp_utils.data_status import write_data_status
 from shp_utils.logging_utils import StepClock, git_commit, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat, task_limit_from_env
 from shp_utils.official_api import MarketFetchCounts
-from shp_utils.process_lock import RUN_DAILY_LOCK_NAME, RunAlreadyActiveError, acquire_run_lock, release_run_lock
+from shp_utils.process_lock import RUN_DAILY_LOCK_NAME, RunAlreadyActiveError, acquire_run_lock, bind_children_to_this_process, release_run_lock
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,8 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except RunAlreadyActiveError as error:
         logger.error("run_daily not started: %s", error)
         return 1
+    # The lock ends with this process; make its children (e.g. the conversion pool) end with it too.
+    bind_children_to_this_process()
     try:
         return _run_steps(codes, backup_dir, archive)
     finally:
