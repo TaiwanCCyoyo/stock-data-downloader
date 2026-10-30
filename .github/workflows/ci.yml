@@ -10,7 +10,10 @@ permissions:
     contents: read
 
 # A title/body edit must neither cancel validation nor publish a successful
-# skipped check with the required check's name. Retargets still validate.
+# skipped check with the required check's name. Actions does not evaluate the
+# name of a job skipped by a job-level if, so a metadata edit runs this job on
+# Ubuntu under the evaluated name metadata-edit-ignored with every validation
+# step skipped. Retargets still validate.
 concurrency:
     group: ${{ github.workflow }}-${{ github.event.action == 'edited' && github.event.changes.base == null && github.run_id || github.event.pull_request.number || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -18,20 +21,26 @@ concurrency:
 jobs:
     repository-checks:
         name: ${{ github.event.action == 'edited' && github.event.changes.base == null && 'metadata-edit-ignored' || 'repository-checks' }}
-        if: github.event.action != 'edited' || github.event.changes.base != null
-        runs-on: windows-latest
+        runs-on: ${{ github.event.action == 'edited' && github.event.changes.base == null && 'ubuntu-latest' || 'windows-latest' }}
         timeout-minutes: 30
         env:
+            METADATA_EDIT: ${{ github.event.action == 'edited' && github.event.changes.base == null }}
             PRE_COMMIT_HOME: ${{ github.workspace }}/.cache/pre-commit
         steps:
-            - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+            - name: Metadata edit ignored
+              if: env.METADATA_EDIT == 'true'
+              run: echo "Title/body edit only; code validation is unchanged."
+            - if: env.METADATA_EDIT != 'true'
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
               with:
                   persist-credentials: false
                   fetch-depth: 0
             - name: Read exact Python version
+              if: env.METADATA_EDIT != 'true'
               id: python-version
               run: '"version=$((Get-Content .python-version -Raw).Trim())" >> $env:GITHUB_OUTPUT'
-            - uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
+            - if: env.METADATA_EDIT != 'true'
+              uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
               with:
                   enable-cache: true
                   python-version: ${{ steps.python-version.outputs.version }}
@@ -40,6 +49,7 @@ jobs:
                       pyproject.toml
                       .python-version
             - name: Select scope
+              if: env.METADATA_EDIT != 'true'
               id: scope
               env:
                   CHECK_BASE: ${{ github.event.pull_request.base.sha }}
@@ -53,14 +63,17 @@ jobs:
                   }
                   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             - name: Install dependencies
+              if: env.METADATA_EDIT != 'true'
               run: uv sync --locked --group dev
             - name: Identify hook interpreter
+              if: env.METADATA_EDIT != 'true'
               id: hook-python
               run: |
                   $identity = uv run --no-sync python -c "import hashlib, sys; print(hashlib.sha256((sys.version + sys.executable).encode()).hexdigest())"
                   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                   "identity=$identity" >> $env:GITHUB_OUTPUT
             - name: Restore hook environments
+              if: env.METADATA_EDIT != 'true'
               id: hook-cache
               uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
               with:
@@ -68,15 +81,16 @@ jobs:
                   key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.hook-python.outputs.identity }}-${{ hashFiles('.pre-commit-config.yaml', 'uv.lock') }}
             - name: Prepare hook environments
               id: hook-environments
-              if: steps.hook-cache.outputs.cache-hit != 'true'
+              if: env.METADATA_EDIT != 'true' && steps.hook-cache.outputs.cache-hit != 'true'
               run: uv run --no-sync pre-commit install-hooks
             - name: Save hook environments
-              if: steps.hook-cache.outputs.cache-hit != 'true' && steps.hook-environments.outcome == 'success'
+              if: env.METADATA_EDIT != 'true' && steps.hook-cache.outputs.cache-hit != 'true' && steps.hook-environments.outcome == 'success'
               uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
               with:
                   path: ${{ env.PRE_COMMIT_HOME }}
                   key: ${{ steps.hook-cache.outputs.cache-primary-key }}
             - name: Repository checks
+              if: env.METADATA_EDIT != 'true'
               env:
                   CHECK_BASE: ${{ steps.scope.outputs.merge_base }}
                   CHECK_HEAD: ${{ steps.scope.outputs.head }}
@@ -89,13 +103,13 @@ jobs:
                   }
                   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             - name: Full offline tests
-              if: steps.scope.outputs.full == 'true'
+              if: env.METADATA_EDIT != 'true' && steps.scope.outputs.full == 'true'
               run: uv run --no-sync python -m pytest --durations=20
             - name: Prose selector contracts
-              if: steps.scope.outputs.full != 'true'
+              if: env.METADATA_EDIT != 'true' && steps.scope.outputs.full != 'true'
               run: uv run --no-sync python -m pytest tests/test_ci_scope.py --durations=20
             - name: Publish scope evidence
-              if: always()
+              if: always() && env.METADATA_EDIT != 'true'
               run: |
                   if (Test-Path .tmp/ci-plan.json) {
                       '### Validation scope' >> $env:GITHUB_STEP_SUMMARY

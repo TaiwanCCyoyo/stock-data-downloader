@@ -21,13 +21,21 @@ def test_workflow_keeps_metadata_edits_separate_from_required_validation() -> No
     assert "edited" in config["on"]["pull_request"]["types"]
     job = config["jobs"]["repository-checks"]
     metadata = "github.event.action == 'edited' && github.event.changes.base == null"
-    assert job["if"] == "github.event.action != 'edited' || github.event.changes.base != null"
+    # A job skipped by a job-level if keeps its unevaluated name, so the job
+    # must run for the metadata-edit name to replace the required one.
+    assert "if" not in job
     assert job["name"] == "${{ " + metadata + " && 'metadata-edit-ignored' || 'repository-checks' }}"
+    assert job["env"]["METADATA_EDIT"] == "${{ " + metadata + " }}"
     assert config["concurrency"]["group"] == (
         "${{ github.workflow }}-${{ " + metadata + " && github.run_id || github.event.pull_request.number || github.run_id }}"
     )
-    assert job["runs-on"] == "windows-latest"
+    assert job["runs-on"] == "${{ " + metadata + " && 'ubuntu-latest' || 'windows-latest' }}"
     assert config["permissions"] == {"contents": "read"}
+    guard = "env.METADATA_EDIT != 'true'"
+    notice, *validation = job["steps"]
+    assert notice["if"] == "env.METADATA_EDIT == 'true'"
+    # Every validation step is Windows PowerShell work that a metadata edit must skip.
+    assert all(guard in step.get("if", "") for step in validation)
 
 
 def test_workflow_uses_exact_python_and_selected_merge_base() -> None:
@@ -38,8 +46,8 @@ def test_workflow_uses_exact_python_and_selected_merge_base() -> None:
     assert setup["with"]["python-version"] == "${{ steps.python-version.outputs.version }}"
     assert named["Repository checks"]["env"]["CHECK_BASE"] == "${{ steps.scope.outputs.merge_base }}"
     assert named["Install dependencies"]["run"] == "uv sync --locked --group dev"
-    assert named["Full offline tests"]["if"] == "steps.scope.outputs.full == 'true'"
-    assert named["Prose selector contracts"]["if"] == "steps.scope.outputs.full != 'true'"
+    assert named["Full offline tests"]["if"] == "env.METADATA_EDIT != 'true' && steps.scope.outputs.full == 'true'"
+    assert named["Prose selector contracts"]["if"] == "env.METADATA_EDIT != 'true' && steps.scope.outputs.full != 'true'"
     # Only evidence publication may override normal success gating after a failure.
     assert all("always()" not in step.get("if", "") for step in steps if step.get("name") != "Publish scope evidence")
 
