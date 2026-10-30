@@ -79,3 +79,25 @@ def test_pid_probe_basics():
     assert not pid_is_running(_dead_pid())
     assert not pid_is_running(0)
     assert not pid_is_running(True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="process creation time is read through the Windows API")
+def test_a_live_pid_created_after_the_lock_is_a_reused_pid(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    # This test process started long after 2000-01-01, so the lock cannot be its own.
+    lock = tmp_path / ".run_daily.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "started_at": "2000-01-01T00:00:00+00:00", "git_commit": "old"}), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        acquire_run_lock(lock, git_commit="new")
+
+    assert "now names a process started after the lock" in caplog.text
+    assert json.loads(lock.read_text(encoding="utf-8"))["git_commit"] == "new"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="process creation time is read through the Windows API")
+def test_a_live_pid_that_predates_the_lock_still_blocks(tmp_path: Path):
+    lock = tmp_path / ".run_daily.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "started_at": "2999-01-01T00:00:00+00:00", "git_commit": "old"}), encoding="utf-8")
+
+    with pytest.raises(RunAlreadyActiveError):
+        acquire_run_lock(lock, git_commit="new")
