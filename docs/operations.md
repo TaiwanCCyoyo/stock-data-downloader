@@ -125,6 +125,28 @@ Get-ScheduledTask -TaskName StockProject-* |
 Get-ScheduledTask -TaskName StockProject-* | Get-ScheduledTaskInfo
 ```
 
+### Writer lock files
+
+Each long-running writer leaves an advisory JSON marker in the data directory while it
+runs and removes it on a normal end:
+
+| File                    | Writer                              | Content                                          |
+| ----------------------- | ----------------------------------- | ------------------------------------------------ |
+| `.run_daily.lock`       | `scripts/run_daily.py`              | `{"pid", "started_at", "git_commit"}`            |
+| `.official_backfill.lock` | `scripts/backfill_official_history.py` | `{"pid", "started_at"}`                       |
+
+A consumer can treat either file whose `pid` names a live process as "the producer is
+writing". A file whose process is gone is stale (an earlier run died) and is not a
+writer; the next run logs a warning and replaces it. A second `run_daily.py` refuses to
+start (exit 1) while the recorded pid is alive. The files are advisory only: they do not
+stop SQLite readers, and `StockProject-*` task state remains the primary signal.
+
+Task Scheduler's `ExecutionTimeLimit` ends only `wscript.exe`; the `cmd`/`uv`/Python chain
+can keep running as an orphan (2026-10-29: 34 minutes past the 3h limit). The launchers
+export `STOCK_PROJECT_TASK_LIMIT_SECONDS`; Python's heartbeat then logs one ERROR
+(`task time limit passed: ...`) and the wrapper's `end` line records `elapsed_s` and
+`over_limit`. Nothing is stopped automatically.
+
 ## Logs and progress
 
 Logs are appended to `logs/<script>_<YYYYMMDD>.log`. Inspect the primary checkout's

@@ -61,8 +61,9 @@ from fetch_value_chain_classification import refresh_value_chain_classification
 
 from config import config
 from shp_utils.data_status import write_data_status
-from shp_utils.logging_utils import StepClock, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat
+from shp_utils.logging_utils import StepClock, git_commit, launch_epoch_from_env, log_startup, setup_logging, start_heartbeat, task_limit_from_env
 from shp_utils.official_api import MarketFetchCounts
+from shp_utils.process_lock import RUN_DAILY_LOCK_NAME, RunAlreadyActiveError, acquire_run_lock, release_run_lock
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,11 @@ logger = logging.getLogger(__name__)
 # ahead of the kill, so a run heading for it shows it.
 SCHEDULER_TIME_LIMIT_SEC = 3 * 3600
 HEARTBEAT_WARN_MARGIN_SEC = 30 * 60
+
+# Advisory marker of a live daily run, beside the backfill's .official_backfill.lock: while the
+# pid it names is alive the producer may be writing. Resolved at call time through this constant
+# so tests can redirect it.
+DEFAULT_LOCK_PATH = config.DATA_DIR / RUN_DAILY_LOCK_NAME
 
 
 def _corporate_action_fetch_args(source: str, year: int, *, force: bool) -> argparse.Namespace:
@@ -131,6 +137,23 @@ def _refresh_corporate_actions(today: datetime.date | None = None) -> None:
 
 
 def main(codes: list[str] | None = None, backup_dir: str | None = None, archive: bool = False) -> int:
+    """Run the daily refresh under the ``.run_daily.lock`` marker; see ``_run_steps``.
+
+    Returns 1 without running anything when another run_daily is alive.
+    """
+    setup_logging("run_daily.log")
+    try:
+        acquire_run_lock(DEFAULT_LOCK_PATH, git_commit=git_commit())
+    except RunAlreadyActiveError as error:
+        logger.error("run_daily not started: %s", error)
+        return 1
+    try:
+        return _run_steps(codes, backup_dir, archive)
+    finally:
+        release_run_lock(DEFAULT_LOCK_PATH)
+
+
+def _run_steps(codes: list[str] | None, backup_dir: str | None, archive: bool) -> int:
     """Run the daily refresh. Returns 0 when every step succeeded, 1 otherwise.
 
     Steps are divided into two classes. Steps 1, 2 and 5 write the price cache,
@@ -145,7 +168,6 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     report.
     Downloading nothing is not a failure -- that is simply a non-trading day.
     """
-    setup_logging("run_daily.log")
     # Load .env up front rather than relying on a later step to do it, so
     # machine-local settings (SHIOAJI_BACKUP_DIR) are available to every step
     # regardless of which ones run. This checkout's own file only; see
@@ -158,12 +180,14 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
 
     logger.info("=== 日常更新作業開始 %s ===", datetime.datetime.now())
     log_startup(logger, "run_daily")
+    step_clock = StepClock(logger)
     heartbeat_stop = start_heartbeat(
         logger,
         warn_after_seconds=SCHEDULER_TIME_LIMIT_SEC - HEARTBEAT_WARN_MARGIN_SEC,
         launch_epoch=launch_epoch_from_env(),
+        task_limit_seconds=task_limit_from_env(),
+        current_step=lambda: step_clock.current,
     )
-    step_clock = StepClock(logger)
     logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     logger.info("\n--- 步驟 1: 下載股票資料 ---")
     step_clock.begin("步驟 1")

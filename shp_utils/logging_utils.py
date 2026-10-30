@@ -5,6 +5,7 @@ import platform
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from rich.logging import RichHandler
@@ -78,6 +79,11 @@ HEARTBEAT_INTERVAL_SEC = 600.0
 # slow `uv run` start would otherwise hide most of the elapsed time from the heartbeat.
 LAUNCH_EPOCH_ENV = "STOCK_PROJECT_LAUNCH_EPOCH"
 
+# Set by the same launchers to the task's Task Scheduler ExecutionTimeLimit in seconds. Task Scheduler
+# ends only the wscript.exe process at the limit; the cmd/uv/python chain below it keeps running
+# (2026-10-29: the daily run finished 34 minutes past its 3h limit), so the Python side reports it.
+TASK_LIMIT_ENV = "STOCK_PROJECT_TASK_LIMIT_SECONDS"
+
 
 def log_startup(logger: logging.Logger, label: str) -> None:
     """Record who is running, as the first lines a run writes.
@@ -87,10 +93,10 @@ def log_startup(logger: logging.Logger, label: str) -> None:
     process in Task Scheduler / Task Manager and to the code that produced it.
     """
     logger.info("startup: %s pid=%d python=%s platform=%s", label, os.getpid(), platform.python_version(), platform.platform())
-    logger.info("startup: git_commit=%s cwd=%s", _git_commit(), Path.cwd())
+    logger.info("startup: git_commit=%s cwd=%s", git_commit(), Path.cwd())
 
 
-def _git_commit() -> str:
+def git_commit() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -114,12 +120,23 @@ def launch_epoch_from_env() -> float | None:
     return value if 0 < value <= time.time() else None
 
 
+def task_limit_from_env() -> float | None:
+    """The scheduler's time limit in seconds from ``TASK_LIMIT_ENV``, or None when unset or malformed."""
+    try:
+        value = float(os.environ.get(TASK_LIMIT_ENV, "").strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def start_heartbeat(
     logger: logging.Logger,
     *,
     interval_seconds: float = HEARTBEAT_INTERVAL_SEC,
     warn_after_seconds: float | None = None,
     launch_epoch: float | None = None,
+    task_limit_seconds: float | None = None,
+    current_step: Callable[[], str | None] | None = None,
 ) -> threading.Event:
     """Log a heartbeat line at once, then every ``interval_seconds``, until the returned event is set.
 
@@ -134,11 +151,18 @@ def start_heartbeat(
     counts from the launch; otherwise from this call, which undercounts any
     time spent before Python started. The line reports ``since_launch`` only in
     the first case, so the log says which clock the warning used.
+
+    ``task_limit_seconds`` (with a known ``launch_epoch``) adds a single ERROR once the run
+    outlives the scheduler's limit: the task has then been ended by the scheduler while this
+    process carries on as an orphan. Observability only; nothing is stopped. ``current_step``
+    names the step being run for that line.
     """
     stop = threading.Event()
     started = time.monotonic()
+    limit_reported = False
 
     def emit() -> None:
+        nonlocal limit_reported
         elapsed = time.monotonic() - started
         since_launch = time.time() - launch_epoch if launch_epoch is not None else None
         age = since_launch if since_launch is not None else elapsed
@@ -147,6 +171,15 @@ def start_heartbeat(
             logger.log(level, "heartbeat: pid=%d elapsed=%.0fs", os.getpid(), elapsed)
         else:
             logger.log(level, "heartbeat: pid=%d elapsed=%.0fs since_launch=%.0fs", os.getpid(), elapsed, since_launch)
+        if task_limit_seconds is not None and since_launch is not None and since_launch > task_limit_seconds and not limit_reported:
+            limit_reported = True
+            step = current_step() if current_step is not None else None
+            logger.error(
+                "task time limit passed: since_launch=%.0fs limit=%.0fs; Task Scheduler has likely ended the task while this process continues (orphan)%s",
+                since_launch,
+                task_limit_seconds,
+                f" current_step={step}" if step else "",
+            )
 
     def beat() -> None:
         # The first line is written at once, not after one interval: a run that starts already past
@@ -171,6 +204,11 @@ class StepClock:
         self._logger = logger
         self._name: str | None = None
         self._started = 0.0
+
+    @property
+    def current(self) -> str | None:
+        """Name of the step in progress, or None between steps."""
+        return self._name
 
     def begin(self, name: str) -> None:
         self.finish()

@@ -34,6 +34,7 @@ import logging
 import os
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -43,8 +44,9 @@ from typing import Any
 from fetch_official_daily_price import DEFAULT_DB_PATH, MARKET_TPEX, MARKET_TWSE, connect, init_db, insert_rows, upsert_rows
 
 from config import config
-from shp_utils.logging_utils import log_startup, setup_logging, start_heartbeat
+from shp_utils.logging_utils import launch_epoch_from_env, log_startup, setup_logging, start_heartbeat, task_limit_from_env
 from shp_utils.official_api import fetch_json_with_retry, parse_int, parse_number
+from shp_utils.process_lock import pid_is_running as _pid_is_running
 from shp_utils.twse_market_day import TWSE_EARLIEST_DATE, fetch_twse_market_day, normalize_twse_market_day_payload
 
 logger = logging.getLogger(__name__)
@@ -159,6 +161,8 @@ DEFAULT_AUTO_MAX_SECONDS = 3600.0
 # concurrent writers, see fetch_official_daily_price.connect()'s WAL/busy_timeout) --
 # this guards against two backfills doubling the request rate and risking a TWSE
 # IP block. run_daily.py's own fetch deliberately does not check this lock.
+SYMBOL_META_FILENAME = "symbol_meta.sqlite"
+
 DEFAULT_LOCK_PATH = config.DATA_DIR / ".official_backfill.lock"
 _ORIGINAL_DEFAULT_LOCK_PATH = DEFAULT_LOCK_PATH
 
@@ -190,54 +194,6 @@ def acquire_lock(lock_path: Path = DEFAULT_LOCK_PATH) -> None:
 
 def release_lock(lock_path: Path = DEFAULT_LOCK_PATH) -> None:
     lock_path.unlink(missing_ok=True)
-
-
-def _pid_is_running(pid: int) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    if os.name == "nt":
-        return _windows_pid_is_running(pid)
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _windows_pid_is_running(pid: int) -> bool:
-    """Query a Windows process without sending it a console control event."""
-    import ctypes
-    from ctypes import wintypes
-
-    process_query_limited_information = 0x1000
-    error_access_denied = 5
-    still_active = 259
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    open_process = kernel32.OpenProcess
-    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    open_process.restype = wintypes.HANDLE
-    get_exit_code_process = kernel32.GetExitCodeProcess
-    get_exit_code_process.argtypes = [wintypes.HANDLE, wintypes.LPDWORD]
-    get_exit_code_process.restype = wintypes.BOOL
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = [wintypes.HANDLE]
-    close_handle.restype = wintypes.BOOL
-
-    handle = open_process(process_query_limited_information, False, pid)
-    if not handle:
-        return ctypes.get_last_error() == error_access_denied
-
-    try:
-        exit_code = wintypes.DWORD()
-        if not get_exit_code_process(handle, ctypes.byref(exit_code)):
-            return True
-        return exit_code.value == still_active
-    finally:
-        close_handle(handle)
 
 
 @dataclass(frozen=True)
@@ -290,7 +246,7 @@ def main() -> None:
     args = parser.parse_args()
     logger.info("data directory: %s (%s)", config.DATA_DIR, config.DATA_DIR_SOURCE)
     log_startup(logger, "backfill_official_history")
-    heartbeat_stop = start_heartbeat(logger)
+    heartbeat_stop = start_heartbeat(logger, launch_epoch=launch_epoch_from_env(), task_limit_seconds=task_limit_from_env())
     if args.max_consecutive_failures is not None and args.max_consecutive_failures <= 0:
         parser.error("--max-consecutive-failures must be a positive integer")
 
@@ -313,6 +269,7 @@ def main() -> None:
         twse_dates = load_twse_dates_to_fetch(args.db_path)
         logger.info("auto plan: TWSE dates resolved in %.1fs", time.monotonic() - query_started)
         logger.info("auto plan: %d TWSE codes, %d TWSE day(s), %d TPEx day(s)", len(codes), len(twse_dates), len(tpex_dates))
+        listing_months = load_listing_months(args.db_path.parent / SYMBOL_META_FILENAME)
         newest_first = True
         max_seconds = resolve_auto_budget(args.max_requests, args.max_seconds)
     else:
@@ -322,6 +279,7 @@ def main() -> None:
         tpex_dates = args.tpex_dates or []
         twse_dates = args.twse_dates or []
         newest_first = False
+        listing_months = None
         max_seconds = args.max_seconds if any(explicit_args_given) else resolve_auto_budget(args.max_requests, args.max_seconds)
 
     stats = run_backfill(
@@ -340,6 +298,7 @@ def main() -> None:
         tpex_dates=tpex_dates,
         twse_dates=twse_dates,
         auto_tpex_dates=auto_mode and args.tpex_dates is None,
+        listing_months=listing_months,
     )
     heartbeat_stop.set()
     logger.info("backfill_stats: %s", stats)
@@ -364,6 +323,7 @@ def run_backfill(
     tpex_dates: list[str] | None = None,
     twse_dates: list[str] | None = None,
     auto_tpex_dates: bool = False,
+    listing_months: dict[str, str] | None = None,
 ) -> dict[str, int]:
     if max_consecutive_failures is not None and max_consecutive_failures <= 0:
         raise ValueError("max_consecutive_failures must be a positive integer")
@@ -378,7 +338,12 @@ def run_backfill(
         init_history_raw_ranges_table(db_path)
         twse_units = build_twse_day_crawl_units(twse_dates or [])
         units = twse_units + build_tpex_crawl_units(tpex_dates or [])
-        month_units = build_crawl_units(codes, start_year_month, end_year_month, newest_first=newest_first)
+        month_units = build_crawl_units(codes, start_year_month, end_year_month, newest_first=newest_first, listing_months=listing_months)
+        if listing_months is not None:
+            planned_counts = Counter(unit.code for unit in build_crawl_units(codes, start_year_month, end_year_month))
+            kept_counts = Counter(unit.code for unit in month_units)
+            skipped_codes = sum(1 for code, count in planned_counts.items() if kept_counts[code] < count)
+            logger.info("auto plan: skipped %d pre-listing month unit(s) across %d code(s)", sum(planned_counts.values()) - len(month_units), skipped_codes)
         units += month_units
         stats = {"fetched": 0, "skipped_cached": 0, "failed": 0}
         consecutive_failures = 0
@@ -493,13 +458,54 @@ def run_backfill(
         release_lock(lock_path)
 
 
-def build_crawl_units(codes: list[str], start_year_month: str, end_year_month: str, *, newest_first: bool = False) -> list[CrawlUnit]:
+def build_crawl_units(
+    codes: list[str],
+    start_year_month: str,
+    end_year_month: str,
+    *,
+    newest_first: bool = False,
+    listing_months: dict[str, str] | None = None,
+) -> list[CrawlUnit]:
+    """Per-code monthly TWSE units.
+
+    ``listing_months`` maps a code to the ``YYYY-MM`` of its listing date; months before it are
+    not planned for that code, which did not exist yet. Codes absent from the mapping keep every
+    month.
+    """
     months = [ym for ym in month_range(start_year_month, end_year_month) if ym >= EARLIEST_SUPPORTED_YEAR_MONTH]
+    floors = listing_months or {}
     if newest_first:
         # Month-major (not code-major) so one unchanging command naturally finishes
         # every code's newest month before it touches an older one.
-        return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for month in reversed(months) for code in codes]
-    return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for code in codes for month in months]
+        return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for month in reversed(months) for code in codes if month >= floors.get(code, "")]
+    return [CrawlUnit(market=MARKET_TWSE, code=code, period=month) for code in codes for month in months if month >= floors.get(code, "")]
+
+
+def load_listing_months(symbol_meta_path: Path) -> dict[str, str]:
+    """Code -> ``YYYY-MM`` of its ``listed_date``, read-only from symbol_meta.sqlite.
+
+    Codes with a missing or unparseable listed_date are left out, as is everything when the
+    database or table is absent or unreadable, so the caller falls back to planning every month.
+    """
+    if not symbol_meta_path.is_file():
+        return {}
+    try:
+        conn = sqlite3.connect(f"{symbol_meta_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT code, listed_date FROM symbol_meta WHERE listed_date IS NOT NULL").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.warning("symbol_meta unreadable at %s; planning every month for every code", symbol_meta_path, exc_info=True)
+        return {}
+    months: dict[str, str] = {}
+    for code, listed in rows:
+        try:
+            if date.fromisoformat(listed).isoformat() == listed:
+                months[str(code)] = listed[:7]
+        except (TypeError, ValueError):
+            continue
+    return months
 
 
 def build_tpex_crawl_units(dates: list[str]) -> list[CrawlUnit]:
@@ -518,6 +524,20 @@ def build_twse_day_crawl_units(dates: list[str]) -> list[CrawlUnit]:
     return units
 
 
+def _dates_by_market(conn: sqlite3.Connection, markets: tuple[str, ...]) -> dict[str, set[str]]:
+    """Distinct stored dates per market, from one pass over the primary-key index.
+
+    The planners used to run one ``SELECT DISTINCT date`` scan per market (or per set operand),
+    each reading the whole multi-million-row table; the answer for every market comes out of a
+    single covering-index scan instead.
+    """
+    dates: dict[str, set[str]] = {market: set() for market in markets}
+    placeholders = ", ".join("?" for _ in markets)
+    for market, day in conn.execute(f"SELECT DISTINCT market, date FROM official_daily_price WHERE market IN ({placeholders})", markets):
+        dates[market].add(day)
+    return dates
+
+
 def load_twse_dates_to_fetch(db_path: Path, *, today: date | None = None) -> list[str]:
     """Observed, retryable and recent days, missing TWSE first then newest first."""
     today = today or date.today()
@@ -526,10 +546,9 @@ def load_twse_dates_to_fetch(db_path: Path, *, today: date | None = None) -> lis
     settled: set[str] = set()
     if db_path.is_file():
         with connect(db_path) as conn:
-            candidates.update(
-                row[0] for row in conn.execute("SELECT DISTINCT date FROM official_daily_price WHERE market IN (?, ?)", (MARKET_TWSE, MARKET_TPEX))
-            )
-            existing = {row[0] for row in conn.execute("SELECT DISTINCT date FROM official_daily_price WHERE market = ?", (MARKET_TWSE,))}
+            stored = _dates_by_market(conn, (MARKET_TWSE, MARKET_TPEX))
+            candidates.update(stored[MARKET_TWSE], stored[MARKET_TPEX])
+            existing = stored[MARKET_TWSE]
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'official_history_raw_ranges' AND type = 'table'").fetchone():
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(official_history_raw_ranges)")}
                 period_column = "period" if "period" in columns else "year_month"
@@ -551,18 +570,31 @@ def load_twse_dates_to_fetch(db_path: Path, *, today: date | None = None) -> lis
     return sorted(eligible, key=lambda day: (day not in existing, day), reverse=True)
 
 
+def _market_codes_with_last_date(conn: sqlite3.Connection, market: str) -> dict[str, str]:
+    """Each stored code of ``market`` with its newest date, by index seeks instead of a table scan.
+
+    The primary key is (market, code, date), so the next code after ``code`` and a code's newest
+    date are each one seek: about one seek per code (~1,400 for TWSE) rather than reading every row.
+    """
+    last_dates: dict[str, str] = {}
+    row = conn.execute("SELECT code FROM official_daily_price WHERE market = ? ORDER BY code LIMIT 1", (market,)).fetchone()
+    while True:
+        if row is None:
+            return last_dates
+        code = row[0]
+        last_dates[code] = conn.execute("SELECT MAX(date) FROM official_daily_price WHERE market = ? AND code = ?", (market, code)).fetchone()[0]
+        row = conn.execute("SELECT code FROM official_daily_price WHERE market = ? AND code > ? ORDER BY code LIMIT 1", (market, code)).fetchone()
+
+
 def load_twse_backfill_universe(db_path: Path) -> list[str]:
     """Established symbol checkpoints plus codes on the newest TWSE day."""
     if not db_path.is_file():
         return []
     with connect(db_path) as conn:
-        codes = {
-            row[0]
-            for row in conn.execute(
-                "SELECT DISTINCT code FROM official_daily_price WHERE market = ? AND date = (SELECT MAX(date) FROM official_daily_price WHERE market = ?)",
-                (MARKET_TWSE, MARKET_TWSE),
-            )
-        }
+        last_dates = _market_codes_with_last_date(conn, MARKET_TWSE)
+        newest = max(last_dates.values(), default=None)
+        # A code has a row on the market's newest date exactly when its own newest date is that date.
+        codes = {code for code, last in last_dates.items() if last == newest}
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'official_history_raw_ranges' AND type = 'table'").fetchone():
             codes.update(
                 row[0] for row in conn.execute("SELECT DISTINCT code FROM official_history_raw_ranges WHERE market = ? AND code != ''", (MARKET_TWSE,))
@@ -753,17 +785,8 @@ def load_tpex_dates_to_fetch(db_path: Path, *, today: date | None = None) -> lis
         return []
     today = today or date.today()
     with connect(db_path) as conn:
-        gaps = {
-            row[0]
-            for row in conn.execute(
-                """
-                SELECT DISTINCT date FROM official_daily_price WHERE market = ?
-                EXCEPT
-                SELECT DISTINCT date FROM official_daily_price WHERE market = ?
-                """,
-                (MARKET_TWSE, MARKET_TPEX),
-            )
-        }
+        stored = _dates_by_market(conn, (MARKET_TWSE, MARKET_TPEX))
+        gaps = stored[MARKET_TWSE] - stored[MARKET_TPEX]
         # On a database the crawler has never touched the checkpoint table does not
         # exist yet. Every TPEx day would then look bulk-written, which is true but
         # would queue a full re-crawl off a bare existence check; fall back to gaps
@@ -775,7 +798,7 @@ def load_tpex_dates_to_fetch(db_path: Path, *, today: date | None = None) -> lis
         if has_checkpoints:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(official_history_raw_ranges)")}
             period_column = "period" if "period" in columns else "year_month"
-            bulk_written = {row[0] for row in conn.execute("SELECT DISTINCT date FROM official_daily_price WHERE market = ?", (MARKET_TPEX,))}
+            bulk_written = stored[MARKET_TPEX]
             for period, status in conn.execute(
                 f"SELECT {period_column}, status FROM official_history_raw_ranges "
                 "WHERE market = ? AND code = '' AND status IN ('partial', 'error', 'ok', 'empty')",
