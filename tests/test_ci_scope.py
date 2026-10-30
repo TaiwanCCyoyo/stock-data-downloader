@@ -1,6 +1,7 @@
 """Conservative prose selection and real Git merge-base change handling."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,8 @@ def test_workflow_uses_exact_python_and_selected_merge_base() -> None:
     assert ".python-version" in named["Read exact Python version"]["run"]
     setup = next(step for step in steps if step.get("uses", "").startswith("astral-sh/setup-uv@"))
     assert setup["with"]["python-version"] == "${{ steps.python-version.outputs.version }}"
+    # An unset uv version floats to the newest release; keep it an exact pin.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", setup["with"]["version"])
     assert named["Repository checks"]["env"]["CHECK_BASE"] == "${{ steps.scope.outputs.merge_base }}"
     assert named["Install dependencies"]["run"] == "uv sync --locked --group dev"
     assert named["Full offline tests"]["if"] == "env.METADATA_EDIT != 'true' && steps.scope.outputs.full == 'true'"
