@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,10 @@ LAUNCHERS = (
 @pytest.mark.parametrize(("launcher", "expected_arguments"), LAUNCHERS)
 @pytest.mark.parametrize("suffix", ["cmd", "vbs"])
 @pytest.mark.parametrize("exit_code", [0, 23])
-def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, launcher: str, expected_arguments: str, suffix: str, exit_code: int) -> None:
+@pytest.mark.parametrize("disable_cwd_search", [False, True])
+def test_launchers_use_repository_root_and_propagate_exit_code(
+    tmp_path: Path, launcher: str, expected_arguments: str, suffix: str, exit_code: int, disable_cwd_search: bool
+) -> None:
     source = Path(__file__).resolve().parents[1] / "cron"
     repository = tmp_path / "mock repository with spaces"
     cron = repository / "cron"
@@ -44,7 +48,15 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
         command = ["cmd.exe", "/d", "/c", "call", str(entry)]
     else:
         command = ["cscript.exe", "//nologo", "//B", str(entry)]
-    result = subprocess.run(command, cwd=unrelated, capture_output=True, timeout=20)
+    # Explicit PATH lookup must reach the fake command even when Windows refuses
+    # implicit current-directory lookup. Keep the host's security settings intact.
+    environment = dict(os.environ)
+    environment["PATH"] = os.pathsep.join((str(repository), str(cron), str(unrelated), environment.get("PATH", "")))
+    if disable_cwd_search:
+        environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+    else:
+        environment.pop("NoDefaultCurrentDirectoryInExePath", None)
+    result = subprocess.run(command, cwd=unrelated, env=environment, capture_output=True, timeout=20)
 
     assert result.returncode == exit_code, (result.stdout, result.stderr)
     assert not (unrelated / "invocation.txt").exists()
@@ -56,9 +68,11 @@ def test_launchers_use_repository_root_and_propagate_exit_code(tmp_path: Path, l
     assert abs(int(lines[2]) - time.time()) < 120
     # The wrapper trace brackets the run so a killed or stalled launch is visible in logs/.
     day = datetime.date.today().strftime("%Y%m%d")
-    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_text(encoding="mbcs")
-    assert "wrapper start" in trace
-    assert f"wrapper end exit_code={exit_code}" in trace
+    # CMD dates use the active console code page, which need not match mbcs.
+    # The wrapper's protocol markers are ASCII under either code page.
+    trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_bytes()
+    assert b"wrapper start" in trace
+    assert f"wrapper end exit_code={exit_code}".encode("ascii") in trace
 
 
 @pytest.mark.parametrize("missing_task", [False, True])

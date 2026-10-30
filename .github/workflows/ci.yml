@@ -1,0 +1,105 @@
+name: PR validation
+
+on:
+    pull_request:
+        branches: [main]
+        types: [opened, synchronize, reopened, ready_for_review, edited]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+# A title/body edit must neither cancel validation nor publish a successful
+# skipped check with the required check's name. Retargets still validate.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.action == 'edited' && github.event.changes.base == null && github.run_id || github.event.pull_request.number || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    repository-checks:
+        name: ${{ github.event.action == 'edited' && github.event.changes.base == null && 'metadata-edit-ignored' || 'repository-checks' }}
+        if: github.event.action != 'edited' || github.event.changes.base != null
+        runs-on: windows-latest
+        timeout-minutes: 30
+        env:
+            PRE_COMMIT_HOME: ${{ github.workspace }}/.cache/pre-commit
+        steps:
+            - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+              with:
+                  persist-credentials: false
+                  fetch-depth: 0
+            - name: Read exact Python version
+              id: python-version
+              run: '"version=$((Get-Content .python-version -Raw).Trim())" >> $env:GITHUB_OUTPUT'
+            - uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
+              with:
+                  enable-cache: true
+                  python-version: ${{ steps.python-version.outputs.version }}
+                  cache-dependency-glob: |
+                      uv.lock
+                      pyproject.toml
+                      .python-version
+            - name: Select scope
+              id: scope
+              env:
+                  CHECK_BASE: ${{ github.event.pull_request.base.sha }}
+                  CHECK_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+                  CHECK_EVENT: ${{ github.event_name }}
+              run: |
+                  if ($env:CHECK_EVENT -eq 'workflow_dispatch') {
+                      uv run --no-project python scripts/ci_scope.py --full --output "$env:GITHUB_OUTPUT"
+                  } else {
+                      uv run --no-project python scripts/ci_scope.py --base "$env:CHECK_BASE" --head "$env:CHECK_HEAD" --output "$env:GITHUB_OUTPUT"
+                  }
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            - name: Install dependencies
+              run: uv sync --locked --group dev
+            - name: Identify hook interpreter
+              id: hook-python
+              run: |
+                  $identity = uv run --no-sync python -c "import hashlib, sys; print(hashlib.sha256((sys.version + sys.executable).encode()).hexdigest())"
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  "identity=$identity" >> $env:GITHUB_OUTPUT
+            - name: Restore hook environments
+              id: hook-cache
+              uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+              with:
+                  path: ${{ env.PRE_COMMIT_HOME }}
+                  key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.hook-python.outputs.identity }}-${{ hashFiles('.pre-commit-config.yaml', 'uv.lock') }}
+            - name: Prepare hook environments
+              id: hook-environments
+              if: steps.hook-cache.outputs.cache-hit != 'true'
+              run: uv run --no-sync pre-commit install-hooks
+            - name: Save hook environments
+              if: steps.hook-cache.outputs.cache-hit != 'true' && steps.hook-environments.outcome == 'success'
+              uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+              with:
+                  path: ${{ env.PRE_COMMIT_HOME }}
+                  key: ${{ steps.hook-cache.outputs.cache-primary-key }}
+            - name: Repository checks
+              env:
+                  CHECK_BASE: ${{ steps.scope.outputs.merge_base }}
+                  CHECK_HEAD: ${{ steps.scope.outputs.head }}
+                  CHECK_EVENT: ${{ github.event_name }}
+              run: |
+                  if ($env:CHECK_EVENT -eq 'workflow_dispatch') {
+                      uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+                  } else {
+                      uv run --no-sync pre-commit run --from-ref "$env:CHECK_BASE" --to-ref "$env:CHECK_HEAD" --show-diff-on-failure
+                  }
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            - name: Full offline tests
+              if: steps.scope.outputs.full == 'true'
+              run: uv run --no-sync python -m pytest --durations=20
+            - name: Prose selector contracts
+              if: steps.scope.outputs.full != 'true'
+              run: uv run --no-sync python -m pytest tests/test_ci_scope.py --durations=20
+            - name: Publish scope evidence
+              if: always()
+              run: |
+                  if (Test-Path .tmp/ci-plan.json) {
+                      '### Validation scope' >> $env:GITHUB_STEP_SUMMARY
+                      '```json' >> $env:GITHUB_STEP_SUMMARY
+                      Get-Content .tmp/ci-plan.json >> $env:GITHUB_STEP_SUMMARY
+                      '```' >> $env:GITHUB_STEP_SUMMARY
+                  }
