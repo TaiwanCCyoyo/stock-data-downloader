@@ -153,7 +153,7 @@ closing any descriptor of the file drops a POSIX record lock):
   new run has just locked.
 - On Windows the run puts itself in a kill-on-close job object right after taking the lock,
   so child processes it starts (such as the step 2 conversion pool) end when it ends, however
-  it ends. POSIX has no equivalent here: there the lock covers the parent process only.
+  it ends. If that binding fails it exits 1 before any step writes. POSIX has no equivalent here: there the lock covers the parent process only.
 
 The files do not stop SQLite readers, and `StockProject-*` task state remains the primary
 signal. Deploy a lock-aware version only while no older `run_daily.py` is running: versions

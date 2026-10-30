@@ -44,6 +44,7 @@ run instead of silently succeeding.
 import argparse
 import datetime
 import logging
+import os
 from pathlib import Path
 
 import convert_stock_price
@@ -136,10 +137,16 @@ def _refresh_corporate_actions(today: datetime.date | None = None) -> None:
         raise RuntimeError(f"corporate-action refresh failed for: {', '.join(failures)}")
 
 
+def _child_binding_required() -> bool:
+    """Windows can bind children to this run (a kill-on-close job), so a failure there must stop it."""
+    return os.name == "nt"
+
+
 def main(codes: list[str] | None = None, backup_dir: str | None = None, archive: bool = False) -> int:
     """Run the daily refresh under the ``.run_daily.lock`` marker; see ``_run_steps``.
 
-    Returns 1 without running anything when another run_daily is alive.
+    Returns 1 without running anything when another run_daily is alive, or when, on Windows,
+    its child processes cannot be bound to it.
     """
     setup_logging("run_daily.log")
     try:
@@ -147,9 +154,13 @@ def main(codes: list[str] | None = None, backup_dir: str | None = None, archive:
     except RunAlreadyActiveError as error:
         logger.error("run_daily not started: %s", error)
         return 1
-    # The lock ends with this process; make its children (e.g. the conversion pool) end with it too.
-    bind_children_to_this_process()
     try:
+        # The lock ends with this process; its children (e.g. the conversion pool) must end with
+        # it too, or one could keep writing under the next run's lock. Without that guarantee on
+        # Windows, stop before any step writes. POSIX has no binding here and runs as documented.
+        if not bind_children_to_this_process() and _child_binding_required():
+            logger.error("run_daily not started: child processes could not be bound to this run")
+            return 1
         return _run_steps(codes, backup_dir, archive)
     finally:
         release_run_lock(run_lock)

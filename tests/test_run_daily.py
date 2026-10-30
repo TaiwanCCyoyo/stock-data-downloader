@@ -27,8 +27,8 @@ def _isolated_run_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Keep every test's run lock out of the real data directory."""
     lock = tmp_path / ".run_daily.lock"
     monkeypatch.setattr(run_daily, "DEFAULT_LOCK_PATH", lock)
-    # Never put the test process itself in a kill-on-close job.
-    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
+    # Never put the test process itself in a kill-on-close job; report the binding as made.
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: True)
     return lock
 
 
@@ -542,6 +542,32 @@ def test_the_run_lock_is_removed_when_the_run_dies_with_an_exception(monkeypatch
         run_daily.main()
 
     assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"
+
+
+def test_a_failed_child_binding_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
+    monkeypatch.setattr(run_daily, "_child_binding_required", lambda: True)
+
+    with caplog.at_level("ERROR"):
+        assert run_daily.main() == 1
+
+    assert call_order == [], "no step may run without the child-process guarantee"
+    assert "child processes could not be bound to this run" in caplog.text
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the lock is released"
+
+
+def test_without_child_binding_support_the_run_proceeds(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path):
+    # POSIX: no job objects; the documented limitation is that the lock covers the parent only.
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
+    monkeypatch.setattr(run_daily, "_child_binding_required", lambda: False)
+
+    run_daily.main()
+
+    assert call_order, "steps run where binding is unsupported"
 
 
 def test_a_live_run_lock_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
