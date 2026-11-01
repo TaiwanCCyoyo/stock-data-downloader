@@ -79,7 +79,8 @@ def test_launchers_use_repository_root_and_propagate_exit_code(
     # CMD dates use the active console code page, which need not match mbcs.
     # The wrapper's protocol markers are ASCII under either code page.
     trace = (repository / "logs" / f"wrapper_{launcher.removesuffix('_scheduled')}_{day}.log").read_bytes()
-    assert b"wrapper start" in trace
+    # The start line also names when Task Scheduler started the task (? when the task is not registered, as here).
+    assert re.search(rb"wrapper start cmd=\w+ task_started=\S+ task_start_lag_s=\S+", trace)
     # The end line records the run time and whether it outlived the scheduler limit.
     assert re.search(rf"wrapper end exit_code={exit_code} elapsed_s=\d+ over_limit=0".encode("ascii"), trace)
 
