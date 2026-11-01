@@ -19,7 +19,9 @@ import pyarrow.parquet as pq
 
 LOGGER = logging.getLogger(__name__)
 SCHEMA = "producer-data-status.v1"
-SQLITE_READ_SECONDS = 120
+# A cold full-table read of official prices took 108 s alone (2026-10-31) and passed 120 s every weekday
+# inside run_daily 2026-10-26..30, where the previous steps have just evicted the cache.
+SQLITE_READ_SECONDS = 600
 STABLE_READ_ATTEMPTS = 2
 
 
@@ -50,7 +52,9 @@ def _identity(path: Path) -> tuple[tuple[int, int] | None, ...]:
     for source in (path, Path(str(path) + "-wal")):
         try:
             info = source.stat()
-            result.append((info.st_size, info.st_mtime_ns))
+            # An empty WAL holds no data; its modification time moves when a connection is
+            # opened or closed (monthly_revenue was "changed during read" on every run_daily).
+            result.append((info.st_size, 0 if source is not path and info.st_size == 0 else info.st_mtime_ns))
         except FileNotFoundError:
             result.append(None)
     return tuple(result)

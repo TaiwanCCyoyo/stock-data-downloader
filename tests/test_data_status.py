@@ -192,7 +192,7 @@ def test_retry_does_not_start_after_the_shared_deadline(tmp_path: Path, monkeypa
 
     def slow_and_changing(path: Path, _definition: data_status.Dataset, deadline: float) -> dict:
         calls.append(deadline)
-        clock[0] += 121.0  # one attempt spends the whole shared budget
+        clock[0] += data_status.SQLITE_READ_SECONDS + 1.0  # one attempt spends the whole shared budget
         path.write_bytes(path.read_bytes() + b"changed")
         return {}
 
@@ -213,3 +213,15 @@ def test_null_code_is_not_counted_as_a_symbol(tmp_path: Path) -> None:
         connection.execute("INSERT INTO symbol_meta VALUES ('2330', 'TSMC', ?)", [RECENT])
     entry = indexed(tmp_path)[dataset.id]
     assert entry["status"] == "ok" and entry["rows"] == 2 and entry["symbols"] == 1
+
+
+def test_empty_wal_time_change_is_not_an_artifact_change(tmp_path: Path) -> None:
+    source = tmp_path / "artifact.sqlite"
+    source.write_bytes(b"data")
+    wal = tmp_path / "artifact.sqlite-wal"
+    wal.write_bytes(b"")
+    before = data_status._identity(source)
+    os.utime(wal, ns=(1, 1))
+    assert data_status._identity(source) == before
+    wal.write_bytes(b"frame")
+    assert data_status._identity(source) != before
