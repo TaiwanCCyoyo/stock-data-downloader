@@ -266,3 +266,34 @@ def test_absent_file_is_not_carried_forward(tmp_path: Path) -> None:
     payload = data_status.collect_data_status(tmp_path, now=NOW, previous=previous)
     entry = {item["id"]: item for item in payload["datasets"]}["official_daily"]
     assert entry["status"] == "missing" and entry["rows"] is None
+
+
+@pytest.mark.parametrize(
+    "cached",
+    [
+        {"id": "official_daily", "status": "ok", "rows": 2},
+        {"id": "official_daily", "status": "ok", "rows": 2, "symbols": 2, "last_updated": RECENT, "data_period": {"from": None, "to": "2026-10-23"}},
+        {"id": "official_daily", "status": "ok", "rows": True, "symbols": 2, "last_updated": RECENT, "data_period": {"from": "a", "to": "b"}},
+        {"id": "official_daily", "status": "missing", "rows": 2, "symbols": 2, "last_updated": RECENT, "data_period": {"from": "a", "to": "b"}},
+        "not-a-dict",
+    ],
+)
+def test_malformed_cached_entry_is_not_carried_and_others_still_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached: object) -> None:
+    for dataset in data_status.DATASETS:
+        if dataset.table:
+            create_sqlite(tmp_path, dataset)
+    create_parquet(tmp_path)
+    summary = {"schema": data_status.SCHEMA, "generated_at": NOW.isoformat(), "datasets": [cached]}
+    (tmp_path / "data-status.json").write_text(json.dumps(summary), encoding="utf-8")
+    real = data_status._sqlite_stats
+
+    def slow_official(path: Path, definition: data_status.Dataset, deadline: float) -> dict:
+        if definition.id == "official_daily":
+            raise sqlite3.OperationalError("interrupted")
+        return real(path, definition, deadline)
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", slow_official)
+    entries = {entry["id"]: entry for entry in data_status.write_data_status(tmp_path, now=NOW)["datasets"]}
+    assert entries["official_daily"]["status"] == "missing" and entries["official_daily"]["unavailable_reason"] == "read_deadline"
+    assert entries["official_daily"]["rows"] is None and "carried_from" not in entries["official_daily"]
+    assert entries["price_daily"]["status"] == "ok"

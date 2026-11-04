@@ -184,13 +184,30 @@ CARRY_FORWARD_REASONS = {"read_deadline", "changed_during_read"}
 CARRIED_FIELDS = ("data_period", "last_updated", "symbols", "rows")
 
 
+def _usable(item: Any, known: set[str]) -> bool:
+    """True only for a complete, measured entry; anything else is never carried forward."""
+    if not isinstance(item, dict) or item.get("id") not in known or item.get("status") not in {"ok", "stale"}:
+        return False
+    period = item.get("data_period")
+    counts = (item.get("rows"), item.get("symbols"))
+    return (
+        isinstance(period, dict)
+        and all(isinstance(period.get(side), str) and period[side] for side in ("from", "to"))
+        and isinstance(item.get("last_updated"), str)
+        and bool(item["last_updated"])
+        and all(isinstance(count, int) and not isinstance(count, bool) and count >= 1 for count in counts)
+        and (item.get("carried_from") is None or isinstance(item["carried_from"], str))
+    )
+
+
 def _previous_entries(data_dir: Path) -> dict[str, dict[str, Any]]:
-    """Entries of the last published summary, or nothing when it is absent or unusable."""
+    """Usable entries of the last published summary; a missing or malformed one yields nothing."""
     try:
         payload = json.loads((data_dir / "data-status.json").read_text(encoding="utf-8"))
-        if payload["schema"] != SCHEMA:
+        if payload["schema"] != SCHEMA or not isinstance(payload["generated_at"], str):
             return {}
-        return {item["id"]: {**item, "published_at": payload["generated_at"]} for item in payload["datasets"]}
+        known = {dataset.id for dataset in DATASETS}
+        return {item["id"]: {**item, "published_at": payload["generated_at"]} for item in payload["datasets"] if _usable(item, known)}
     except (OSError, ValueError, TypeError, KeyError):
         return {}
 
