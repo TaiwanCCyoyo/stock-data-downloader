@@ -225,3 +225,44 @@ def test_empty_wal_time_change_is_not_an_artifact_change(tmp_path: Path) -> None
     assert data_status._identity(source) == before
     wal.write_bytes(b"frame")
     assert data_status._identity(source) != before
+
+
+def test_deadline_keeps_the_last_measured_numbers_as_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for dataset in data_status.DATASETS:
+        if dataset.table:
+            create_sqlite(tmp_path, dataset)
+    create_parquet(tmp_path)
+    data_status.write_data_status(tmp_path, now=NOW)
+    real = data_status._sqlite_stats
+
+    def slow_official(path: Path, definition: data_status.Dataset, deadline: float) -> dict:
+        if definition.id == "official_daily":
+            raise sqlite3.OperationalError("interrupted")
+        return real(path, definition, deadline)
+
+    monkeypatch.setattr(data_status, "_sqlite_stats", slow_official)
+    later = datetime(2026, 10, 25, tzinfo=UTC)
+    payload = data_status.write_data_status(tmp_path, now=later)
+    entries = {entry["id"]: entry for entry in payload["datasets"]}
+    assert entries["official_daily"]["status"] == "stale" and entries["official_daily"]["rows"] == 2
+    assert entries["official_daily"]["unavailable_reason"] == "read_deadline"
+    assert entries["official_daily"]["carried_from"] == NOW.isoformat(timespec="seconds")
+    # a second miss keeps pointing at the run that actually measured the numbers
+    again = data_status.write_data_status(tmp_path, now=datetime(2026, 10, 26, tzinfo=UTC))
+    assert {entry["id"]: entry for entry in again["datasets"]}["official_daily"]["carried_from"] == NOW.isoformat(timespec="seconds")
+    assert entries["institutional"]["status"] == "ok" and "carried_from" not in entries["institutional"]
+
+
+def test_absent_file_is_not_carried_forward(tmp_path: Path) -> None:
+    previous = {
+        "official_daily": {
+            "id": "official_daily",
+            "rows": 5,
+            "status": "ok",
+            "published_at": "x",
+            **{k: None for k in data_status.CARRIED_FIELDS if k != "rows"},
+        }
+    }
+    payload = data_status.collect_data_status(tmp_path, now=NOW, previous=previous)
+    entry = {item["id"]: item for item in payload["datasets"]}["official_daily"]
+    assert entry["status"] == "missing" and entry["rows"] is None
