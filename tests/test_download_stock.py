@@ -6,6 +6,7 @@ Run with: uv run pytest test_download_stock.py -v
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -382,6 +383,9 @@ def test_login_waits_for_the_contract_list(isolated_download_env: Path, monkeypa
     the contract list has downloaded. Reading api.Contracts at that point yields a
     partial snapshot -- on 2026-08-27 and 08-28 that was 332 warrants and no
     ordinary stock. The run must ask login to wait."""
+    # Capture the installed SDK before replacing its constructor. The fake's
+    # **kwargs must not hide an SDK upgrade that rejects contracts_timeout.
+    login_signature = inspect.signature(download_stock.sj.Shioaji.login)
     fake_api = FakeApi(kbars_response={})
     _install_fake_api(monkeypatch, fake_api)
 
@@ -389,6 +393,7 @@ def test_login_waits_for_the_contract_list(isolated_download_env: Path, monkeypa
 
     timeout = fake_api.login_kwargs.get("contracts_timeout")
     assert timeout, "login must pass a non-zero contracts_timeout so it waits for the contract list"
+    login_signature.bind(fake_api, api_key="test-key", secret_key="test-secret", **fake_api.login_kwargs)
 
 
 def test_a_half_downloaded_contract_list_aborts_the_run(isolated_download_env: Path, monkeypatch: pytest.MonkeyPatch):

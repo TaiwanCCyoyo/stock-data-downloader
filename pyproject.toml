@@ -10,7 +10,9 @@ dependencies = [
   "python-dotenv>=1.2.2",
   "requests>=2.32",
   "rich>=14.1.0",
-  "shioaji[speed]>=1.2.7",
+  # The downloader uses the 1.2 login(contracts_timeout=...) contract.
+  # Keep this SDK line (and its filelock<4 dependency) until an explicit migration.
+  "shioaji[speed]>=1.2.7,<1.3",
   "truststore>=0.10.4",
   "yfinance>=1.0",
 ]
