@@ -59,6 +59,13 @@ A `missing` entry that could not be read also carries `unavailable_reason`:
 | `changed_during_read` | The file moved during two consecutive reads.                |
 | `unreadable`          | Any other read or validation failure.                       |
 
+When the reason is `read_deadline` or `changed_during_read` and the previous
+`data-status.json` held measured numbers, the entry keeps those numbers instead
+of nulls, is `stale`, and carries `carried_from` (the `generated_at` of the run
+that measured them; it does not advance on repeated misses). `absent` and
+`unreadable` stay `missing`. A busy writer, such as the official backfill
+overlapping step 9b, therefore no longer makes a healthy artifact look absent.
+
 A readable empty artifact has no reason. The field is additive, so `v1` readers
 that ignore unknown keys are unaffected. An artifact whose size or modification
 time (including a non-empty WAL; an empty WAL's time is ignored) moves during a read is read once more before it is

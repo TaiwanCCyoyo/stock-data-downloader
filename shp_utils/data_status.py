@@ -180,8 +180,50 @@ def _unavailable_reason(exc: Exception) -> str:
     return "unreadable"
 
 
-def collect_data_status(data_dir: Path, *, now: datetime | None = None, failed_datasets: set[str] | None = None) -> dict[str, Any]:
-    """Read statistics in isolation; missing or unreadable data never look healthy."""
+CARRY_FORWARD_REASONS = {"read_deadline", "changed_during_read"}
+CARRIED_FIELDS = ("data_period", "last_updated", "symbols", "rows")
+
+
+def _usable(item: Any, known: set[str]) -> bool:
+    """True only for a complete, measured entry; anything else is never carried forward."""
+    if not isinstance(item, dict) or item.get("id") not in known or item.get("status") not in {"ok", "stale"}:
+        return False
+    period = item.get("data_period")
+    counts = (item.get("rows"), item.get("symbols"))
+    return (
+        isinstance(period, dict)
+        and all(isinstance(period.get(side), str) and period[side] for side in ("from", "to"))
+        and isinstance(item.get("last_updated"), str)
+        and bool(item["last_updated"])
+        and all(isinstance(count, int) and not isinstance(count, bool) and count >= 1 for count in counts)
+        and (item.get("carried_from") is None or isinstance(item["carried_from"], str))
+    )
+
+
+def _previous_entries(data_dir: Path) -> dict[str, dict[str, Any]]:
+    """Usable entries of the last published summary; a missing or malformed one yields nothing."""
+    try:
+        payload = json.loads((data_dir / "data-status.json").read_text(encoding="utf-8"))
+        if payload["schema"] != SCHEMA or not isinstance(payload["generated_at"], str):
+            return {}
+        known = {dataset.id for dataset in DATASETS}
+        return {item["id"]: {**item, "published_at": payload["generated_at"]} for item in payload["datasets"] if _usable(item, known)}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+
+
+def collect_data_status(
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+    failed_datasets: set[str] | None = None,
+    previous: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Read statistics in isolation; missing or unreadable data never look healthy.
+
+    A read that only ran out of time or raced a writer keeps the last measured numbers marked
+    ``stale`` with ``carried_from``; a file that is absent or unreadable stays ``missing``.
+    """
     moment = now or datetime.now(UTC)
     if moment.tzinfo is None:
         raise ValueError("timezone-aware status time required")
@@ -212,6 +254,10 @@ def collect_data_status(data_dir: Path, *, now: datetime | None = None, failed_d
         except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
             entry["unavailable_reason"] = _unavailable_reason(exc)
             LOGGER.warning("Data status unavailable dataset=%s reason=%s: %s", dataset.id, entry["unavailable_reason"], exc)
+            last = (previous or {}).get(dataset.id)
+            if entry["unavailable_reason"] in CARRY_FORWARD_REASONS and last and last.get("rows") and last.get("status") in {"ok", "stale"}:
+                entry.update({key: last[key] for key in CARRIED_FIELDS})
+                entry.update(status="stale", carried_from=last.get("carried_from", last["published_at"]))
         entries.append(entry)
         LOGGER.info("Data status dataset=%s state=%s rows=%s seconds=%.3f", dataset.id, entry["status"], entry["rows"], time.monotonic() - started)
     LOGGER.info("Collected data status for %d artifacts", len(entries))
@@ -220,7 +266,7 @@ def collect_data_status(data_dir: Path, *, now: datetime | None = None, failed_d
 
 def write_data_status(data_dir: Path, *, now: datetime | None = None, failed_datasets: set[str] | None = None) -> dict[str, Any]:
     """Atomically replace only the summary; preserve its previous bytes on failure."""
-    payload = collect_data_status(data_dir, now=now, failed_datasets=failed_datasets)
+    payload = collect_data_status(data_dir, now=now, failed_datasets=failed_datasets, previous=_previous_entries(data_dir))
     destination = data_dir / "data-status.json"
     temporary: Path | None = None
     try:
