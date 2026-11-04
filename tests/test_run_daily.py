@@ -8,6 +8,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from threading import Event
 
@@ -15,6 +18,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import run_daily
+
+from shp_utils.process_lock import acquire_run_lock, release_run_lock
+
+
+@pytest.fixture(autouse=True)
+def _isolated_run_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep every test's run lock out of the real data directory."""
+    lock = tmp_path / ".run_daily.lock"
+    monkeypatch.setattr(run_daily, "DEFAULT_LOCK_PATH", lock)
+    # Never put the test process itself in a kill-on-close job; report the binding as made.
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: True)
+    return lock
 
 
 def _patch_all_steps(monkeypatch: pytest.MonkeyPatch, call_order: list[str], *, downloaded_count: int = 1) -> None:
@@ -500,3 +515,86 @@ def test_caught_official_failure_is_distinct_from_successful_zero_rows(monkeypat
     assert run_daily.main() == int(bool(failed_markets))
     assert received == [{"official_daily"} if failed_markets else set()]
     assert "parquet" in call_order and "backup" in call_order
+
+
+def test_the_run_lock_exists_during_the_run_and_is_removed_after(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    seen: list[dict] = []
+    monkeypatch.setattr(run_daily, "run_backup", lambda *_a, **_kw: seen.append(json.loads(_isolated_run_lock.read_text(encoding="utf-8"))))
+
+    assert run_daily.main() == 0
+
+    assert seen[0]["pid"] == os.getpid()
+    assert {"started_at", "git_commit"} <= set(seen[0])
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"
+
+
+def test_the_run_lock_is_removed_when_the_run_dies_with_an_exception(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path):
+    _patch_all_steps(monkeypatch, [])
+
+    def interrupted(*_a, **_kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(run_daily, "build_price_parquet", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_daily.main()
+
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"
+
+
+def test_a_failed_child_binding_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
+    monkeypatch.setattr(run_daily, "_child_binding_required", lambda: True)
+
+    with caplog.at_level("ERROR"):
+        assert run_daily.main() == 1
+
+    assert call_order == [], "no step may run without the child-process guarantee"
+    assert "child processes could not be bound to this run" in caplog.text
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the lock is released"
+
+
+def test_without_child_binding_support_the_run_proceeds(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path):
+    # POSIX: no job objects; the documented limitation is that the lock covers the parent only.
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    monkeypatch.setattr(run_daily, "bind_children_to_this_process", lambda: False)
+    monkeypatch.setattr(run_daily, "_child_binding_required", lambda: False)
+
+    run_daily.main()
+
+    assert call_order, "steps run where binding is unsupported"
+
+
+def test_a_live_run_lock_stops_the_run_before_any_step(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    held = acquire_run_lock(_isolated_run_lock, git_commit="other")
+    try:
+        with caplog.at_level("ERROR"):
+            assert run_daily.main() == 1
+
+        assert call_order == []
+        assert "run_daily not started: another run_daily is running" in caplog.text
+        assert json.loads(_isolated_run_lock.read_text(encoding="utf-8"))["git_commit"] == "other", "the other run's lock must not be touched"
+    finally:
+        release_run_lock(held)
+
+
+def test_a_stale_run_lock_is_replaced_and_the_run_proceeds(monkeypatch: pytest.MonkeyPatch, _isolated_run_lock: Path, caplog: pytest.LogCaptureFixture):
+    call_order: list[str] = []
+    _patch_all_steps(monkeypatch, call_order)
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    _isolated_run_lock.write_text(json.dumps({"pid": dead.pid}), encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        assert run_daily.main() == 0
+
+    assert f"previous run_daily did not finish cleanly (stale lock pid={dead.pid}" in caplog.text
+    assert "backup" in call_order
+    assert _isolated_run_lock.read_text(encoding="utf-8") == "", "the record is cleared; the file stays"

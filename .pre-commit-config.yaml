@@ -1,3 +1,10 @@
+# nodeenv's default resolves the newest Node release, which can be a
+# prerelease it cannot parse (27.0.0-alpha on 2026-10-30). `lts` also moves at
+# install time while hook caches keep whatever was installed, so pin an exact
+# release and upgrade it deliberately.
+default_language_version:
+    node: "24.22.2"
+
 repos:
     # Basic out-of-the-box checks.
     - repo: https://github.com/pre-commit/pre-commit-hooks

@@ -68,6 +68,18 @@ installations must migrate their task actions after merging and pulling; see
 [Windows scheduling](docs/operations.md#windows-scheduling). Directory cleanup
 does not authorize deleting data or archives.
 
+## Pull request validation
+
+Windows CI uses the exact runtime in `.python-version` and the locked development
+environment. Runtime, dependency, configuration, contract and unknown changes run
+the full offline test suite. Only the explicitly reviewed prose paths in
+`scripts/ci_scope.py` use the shorter selector-contract suite; repository hooks
+still inspect the changed files. The plan records paths and the merge base, and
+tests report their slowest durations so future scope changes can use measurements.
+Manual dispatch validates all files and runs the full suite. Pure title/body edits
+do not cancel or replace code validation; changing the target branch validates
+again. CI uses fixtures, not production data or live acquisition commands.
+
 ## Development and PRs
 
 Follow [AGENTS.md](AGENTS.md) and the [Git workflow](docs/en/git-workflow.md):

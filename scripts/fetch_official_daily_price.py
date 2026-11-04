@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import sqlite3
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -69,19 +70,25 @@ def run_fetch(*, db_path: Path = DEFAULT_DB_PATH, retries: int = 3, retry_sleep:
             (MARKET_TPEX, fetch_tpex_bulk, normalize_tpex_bulk_payload),
         ):
             try:
+                http_started = time.monotonic()
                 payload = fetch_fn(retries=retries, retry_sleep=retry_sleep)
+                http_elapsed = time.monotonic() - http_started
                 rows = normalize_fn(payload)
+                write_started = time.monotonic()
                 upsert_rows(conn, rows)
                 conn.commit()
+                write_elapsed = time.monotonic() - write_started
                 counts[market] = len(rows)
                 dates = sorted({str(row["date"]) for row in rows})
                 if dates:
                     trade_dates[market] = dates[-1]
                 logger.info(
-                    "fetched %s official daily bulk: %d rows for %s",
+                    "fetched %s official daily bulk: %d rows for %s http_elapsed=%.1fs write_elapsed=%.1fs",
                     market,
                     len(rows),
                     ", ".join(dates) if dates else "no dated rows",
+                    http_elapsed,
+                    write_elapsed,
                 )
             except Exception:
                 conn.rollback()

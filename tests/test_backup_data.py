@@ -549,3 +549,32 @@ def test_an_aliased_backup_root_for_an_external_source_is_refused(tmp_path: Path
     finally:
         os.rmdir(backup)
     assert sorted(p.name for p in source.iterdir()) == ["2330_day.csv"]
+
+
+def test_large_file_copies_are_bracketed_in_the_log(data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch.setattr(backup_data, "_LARGE_FILE_BYTES", 10)
+
+    with caplog.at_level("INFO", logger="backup_data"):
+        mirror_data_cache(data_dir, tmp_path / "backup")
+
+    start = [r.getMessage() for r in caplog.records if r.getMessage().startswith("backup copy start: official_daily.sqlite (")]
+    done = [r.getMessage() for r in caplog.records if r.getMessage().startswith("backup copy done: official_daily.sqlite (")]
+    assert len(start) == 1
+    assert len(done) == 1
+    assert " MB) in " in done[0]
+    assert (tmp_path / "backup" / "data" / "official_daily.sqlite").read_text(encoding="utf-8") == "official daily\n"
+
+
+def test_small_files_are_not_bracketed_and_progress_is_periodic(
+    data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(backup_data, "_PROGRESS_EVERY_FILES", 3)
+
+    with caplog.at_level("INFO", logger="backup_data"):
+        copied, verified = mirror_data_cache(data_dir, tmp_path / "backup")
+
+    assert "backup copy start" not in caplog.text
+    progress = [r.getMessage() for r in caplog.records if r.getMessage().startswith("backup progress: copied=")]
+    assert progress and all("verified=" in line and "elapsed=" in line for line in progress)
+    assert any("(verify phase)" in r.getMessage() for r in caplog.records)
+    assert copied == verified

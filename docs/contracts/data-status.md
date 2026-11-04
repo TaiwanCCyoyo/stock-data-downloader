@@ -15,7 +15,7 @@ Process termination signals, including `KeyboardInterrupt` and explicit
 
 The 2026-10-24 read-only audit measured 28,029,043 official-price rows over 51,414
 distinct source codes; that full aggregate took 54.658 seconds on local disk.
-Each SQLite artifact has one 120-second deadline across its reads, and
+Each SQLite artifact has one 600-second deadline across its reads, and
 per-artifact elapsed times are logged. This work happens during refresh, never
 during a page request.
 
@@ -55,13 +55,13 @@ A `missing` entry that could not be read also carries `unavailable_reason`:
 | Reason                | Meaning                                                     |
 | --------------------- | ----------------------------------------------------------- |
 | `absent`              | The file does not exist.                                    |
-| `read_deadline`       | The read exceeded the 120-second deadline; the file exists. |
+| `read_deadline`       | The read exceeded the 600-second deadline; the file exists. |
 | `changed_during_read` | The file moved during two consecutive reads.                |
 | `unreadable`          | Any other read or validation failure.                       |
 
 A readable empty artifact has no reason. The field is additive, so `v1` readers
 that ignore unknown keys are unaffected. An artifact whose size or modification
-time (including its WAL) moves during a read is read once more before it is
+time (including a non-empty WAL; an empty WAL's time is ignored) moves during a read is read once more before it is
 reported as `changed_during_read`, because a WAL checkpoint by another reader can
 move it without any data change.
 

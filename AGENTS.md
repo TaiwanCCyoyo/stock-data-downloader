@@ -53,6 +53,12 @@ environment.
 - Run Python through uv: `uv sync`, then `uv run scripts/<name>.py`.
   Entry points live in `scripts/`, shared code in `shp_utils/`, defaults in
   `config/`, tests in `tests/`. See [pipeline commands](docs/pipeline.md).
+- Pin toolchains to exact versions (`.python-version`, the CI uv version,
+  pre-commit Node), never floating aliases such as `latest` or `lts`. Use the
+  newest patch release of a supported line, apply security patch releases
+  promptly, and change every pin of the same tool together. The scheduled
+  tasks use this machine's uv, so install a uv that can provide a new
+  `.python-version` before the production checkout pulls it.
 - Every default data path resolves through `config.config.DATA_DIR`: anchored
   to `config.config.REPO_ROOT`, or an explicit external `SHIOAJI_DATA_DIR` read
   from the process or the checkout's own `.env` (see [data location](docs/operations.md#data-location)).

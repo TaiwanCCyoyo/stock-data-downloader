@@ -31,6 +31,7 @@ import os
 import shutil
 import stat
 import tarfile
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -145,6 +146,12 @@ def _assert_destination_outside(source: Path, dest_root: Path) -> None:
 # into the main database -- so it stays in the mirror.
 _UNMIRRORED_SUFFIXES = ("-shm",)
 
+# Progress logging only; it never changes what is copied or verified. A nightly run once took
+# 9510s instead of ~230s with nothing between "start" and "backup mirror OK" to say which file
+# it was on (2026-10-29), so large copies are bracketed and small ones are counted.
+_LARGE_FILE_BYTES = 100 * 1024 * 1024
+_PROGRESS_EVERY_FILES = 500
+
 
 def _relative_files(root: Path) -> tuple[list[Path], list[Path]]:
     """Return (files to mirror, links refused).
@@ -238,9 +245,14 @@ def verify_mirror(source: Path, dest_data: Path, *, skip: Iterable[Path] = ()) -
     """
     skipped = set(skip)
     problems: list[str] = []
+    started = time.monotonic()
+    checked = 0
     for relative in _relative_files(source)[0]:
         if relative in skipped:
             continue
+        checked += 1
+        if checked % _PROGRESS_EVERY_FILES == 0:
+            logger.info("backup progress: verified=%d elapsed=%.0fs (verify phase)", checked, time.monotonic() - started)
         counterpart = dest_data / relative
         if not counterpart.is_file():
             if not (source / relative).exists():
@@ -286,9 +298,13 @@ def mirror_data_cache(source: Path, dest_root: Path) -> tuple[int, int]:
     dest_data.mkdir(parents=True, exist_ok=True)
 
     copied = 0
+    intact = 0
     unreadable: list[Path] = []
     relatives, refused = _relative_files(source)
-    for relative in relatives:
+    started = time.monotonic()
+    for position, relative in enumerate(relatives, start=1):
+        if position % _PROGRESS_EVERY_FILES == 0:
+            logger.info("backup progress: copied=%d verified=%d elapsed=%.0fs", copied, intact, time.monotonic() - started)
         src_file = source / relative
         dst_file = dest_data / relative
         try:
@@ -306,9 +322,16 @@ def mirror_data_cache(source: Path, dest_root: Path) -> tuple[int, int]:
                 dst_stat = dst_file.stat()
                 # Same size and not older than the source means already mirrored.
                 if dst_stat.st_size == src_stat.st_size and dst_stat.st_mtime >= src_stat.st_mtime:
+                    intact += 1
                     continue
             dst_file.parent.mkdir(parents=True, exist_ok=True)
+            large = src_stat.st_size >= _LARGE_FILE_BYTES
+            file_started = time.monotonic()
+            if large:
+                logger.info("backup copy start: %s (%.0f MB)", relative.as_posix(), src_stat.st_size / (1024 * 1024))
             shutil.copy2(src_file, dst_file)
+            if large:
+                logger.info("backup copy done: %s (%.0f MB) in %.1fs", relative.as_posix(), src_stat.st_size / (1024 * 1024), time.monotonic() - file_started)
         except OSError as error:
             if isinstance(error, FileNotFoundError) and not src_file.exists():
                 logger.info("backup source %s disappeared while it was copied; skipping", relative)
@@ -321,6 +344,7 @@ def mirror_data_cache(source: Path, dest_root: Path) -> tuple[int, int]:
             logger.warning("backup could not copy %s: %s", relative, error)
             continue
         copied += 1
+        intact += 1
 
     _raise_for_problems(verify_mirror(source, dest_data, skip=unreadable), dest_data)
     incomplete = [f"unreadable: {relative}" for relative in unreadable] + [f"link or reparse point: {relative}" for relative in refused]
